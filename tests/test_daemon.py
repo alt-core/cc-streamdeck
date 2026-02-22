@@ -16,24 +16,39 @@ class TestDaemonCheckExisting:
 
 
 class TestDaemonKeyCallback:
-    def test_key_press_sets_response(self, sample_request):
+    def _make_daemon(self, request):
+        """Create a daemon with mocked device_state for toggle tests."""
         daemon = Daemon()
-        daemon._current_request = sample_request
+        daemon._current_request = request
         daemon._response_event.clear()
+        daemon.device_state = MagicMock()
+        daemon.device_state.get_key_image_format.return_value = None
+        return daemon
 
-        # Key 3 = first choice key for 3-choice layout
-        daemon._key_callback(None, 3, True)
+    def test_allow_key(self, sample_request):
+        daemon = self._make_daemon(sample_request)
+
+        # Key 5 = Allow (rightmost, choice_keys[0])
+        daemon._key_callback(None, 5, True)
 
         assert daemon._response_event.is_set()
         assert daemon._response.status == "ok"
         assert daemon._response.chosen.label == "Allow"
 
-    def test_key_release_ignored(self, sample_request):
-        daemon = Daemon()
-        daemon._current_request = sample_request
-        daemon._response_event.clear()
+    def test_deny_key(self, sample_request):
+        daemon = self._make_daemon(sample_request)
 
-        daemon._key_callback(None, 3, False)  # key-up
+        # Key 3 = Deny (left, choice_keys[1])
+        daemon._key_callback(None, 3, True)
+
+        assert daemon._response_event.is_set()
+        assert daemon._response.chosen.label == "Deny"
+        assert daemon._response.chosen.behavior == "deny"
+
+    def test_key_release_ignored(self, sample_request):
+        daemon = self._make_daemon(sample_request)
+
+        daemon._key_callback(None, 5, False)  # key-up
 
         assert not daemon._response_event.is_set()
 
@@ -41,38 +56,76 @@ class TestDaemonKeyCallback:
         daemon = Daemon()
         daemon._current_request = None
 
-        daemon._key_callback(None, 3, True)
+        daemon._key_callback(None, 5, True)
 
         assert not daemon._response_event.is_set()
 
     def test_message_key_ignored(self, sample_request):
-        daemon = Daemon()
-        daemon._current_request = sample_request
-        daemon._response_event.clear()
+        daemon = self._make_daemon(sample_request)
 
         daemon._key_callback(None, 0, True)  # message area key
 
         assert not daemon._response_event.is_set()
 
-    def test_deny_choice(self, sample_request):
-        daemon = Daemon()
-        daemon._current_request = sample_request
-        daemon._response_event.clear()
+    def test_always_toggle_on(self, sample_request):
+        daemon = self._make_daemon(sample_request)
 
-        daemon._key_callback(None, 4, True)  # key 4 = Deny
+        # Key 4 = Always (middle, choice_keys[2])
+        daemon._key_callback(None, 4, True)
 
+        # Should NOT complete the request
+        assert not daemon._response_event.is_set()
+        assert daemon._always_active is True
+
+    def test_always_toggle_off(self, sample_request):
+        daemon = self._make_daemon(sample_request)
+        daemon._always_active = True
+
+        daemon._key_callback(None, 4, True)
+
+        assert not daemon._response_event.is_set()
+        assert daemon._always_active is False
+
+    def test_always_then_allow(self, sample_request):
+        daemon = self._make_daemon(sample_request)
+
+        # Toggle Always on (key 4 = middle)
+        daemon._key_callback(None, 4, True)
+        assert daemon._always_active is True
+
+        # Press Allow — should get the Always choice
+        daemon._key_callback(None, 5, True)
+
+        assert daemon._response_event.is_set()
+        assert daemon._response.chosen.label == "Always"
+        assert daemon._response.chosen.updated_permissions
+
+    def test_deny_ignores_always(self, sample_request):
+        daemon = self._make_daemon(sample_request)
+        daemon._always_active = True
+
+        # Deny always denies, regardless of Always toggle (key 3 = left)
+        daemon._key_callback(None, 3, True)
+
+        assert daemon._response_event.is_set()
         assert daemon._response.chosen.label == "Deny"
         assert daemon._response.chosen.behavior == "deny"
 
-    def test_two_choice_layout(self, two_choice_request):
-        daemon = Daemon()
-        daemon._current_request = two_choice_request
-        daemon._response_event.clear()
+    def test_two_choice_allow(self, two_choice_request):
+        daemon = self._make_daemon(two_choice_request)
 
-        # For 2 choices: choice_keys = [4, 5]
-        daemon._key_callback(None, 4, True)
+        # For 2 choices: choice_keys = [5, 4]
+        daemon._key_callback(None, 5, True)
 
         assert daemon._response.chosen.label == "Allow"
+
+    def test_two_choice_deny(self, two_choice_request):
+        daemon = self._make_daemon(two_choice_request)
+
+        # For 2 choices: choice_keys = [5, 4], key 4 = Deny
+        daemon._key_callback(None, 4, True)
+
+        assert daemon._response.chosen.label == "Deny"
 
 
 class TestDaemonProcessRequest:

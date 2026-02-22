@@ -80,11 +80,11 @@ class DeviceState:
         self._poll_thread.start()
 
     def stop(self) -> None:
-        """Stop polling and close device."""
+        """Stop polling and close device, restoring Elgato logo."""
         self._running = False
-        self._close_device()
         if self._poll_thread:
             self._poll_thread.join(timeout=5)
+        self._close_device(reset=True)
 
     def set_key_images(self, images: dict[int, bytes]) -> None:
         """Set images on the device. Thread-safe."""
@@ -107,8 +107,7 @@ class DeviceState:
         with self._lock:
             if self._deck is None:
                 return
-            with self._deck:
-                self._deck.reset()
+            self._clear_all_keys(self._deck)
 
     def _poll_loop(self) -> None:
         while self._running:
@@ -130,6 +129,7 @@ class DeviceState:
             for d in devices:
                 d.open()
                 d.set_brightness(50)
+                self._clear_all_keys(d)
                 if self._key_callback:
                     d.set_key_callback(self._key_callback)
                 with self._lock:
@@ -140,11 +140,23 @@ class DeviceState:
         except Exception as e:
             logger.debug("Device enumeration failed: %s", e)
 
-    def _close_device(self) -> None:
+    @staticmethod
+    def _clear_all_keys(deck) -> None:
+        """Set all keys to black."""
+        from StreamDeck.ImageHelpers import PILHelper
+
+        black = PILHelper.create_key_image(deck)
+        native = PILHelper.to_native_key_format(deck, black)
+        with deck:
+            for k in range(deck.key_count()):
+                deck.set_key_image(k, native)
+
+    def _close_device(self, reset: bool = False) -> None:
         with self._lock:
             if self._deck is not None:
                 try:
-                    self._deck.reset()
+                    if reset:
+                        self._deck.reset()
                     self._deck.close()
                 except Exception:
                     pass

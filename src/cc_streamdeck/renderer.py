@@ -3,50 +3,65 @@
 from __future__ import annotations
 
 from importlib.resources import files
-from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .config import GRID_COLS, KEY_PIXEL_SIZE
+from .config import GRID_COLS, GRID_ROWS, KEY_PIXEL_SIZE
 from .protocol import PermissionChoice, PermissionRequest
 
-if TYPE_CHECKING:
-    pass
-
-# Inter-key gap on Stream Deck Mini (approximate physical spacing in pixels)
-KEY_SPACING = (18, 18)
+# Height of the choice label strip at the bottom of choice keys
+CHOICE_LABEL_HEIGHT = 20
 
 CHOICE_COLORS = {
     "allow": "#005000",
     "deny": "#800000",
-    "always": "#000080",
+    "always_off": "#000040",
+    "always_on": "#0050D0",
+    "allow_always": "#000080",
 }
+
+# Font sizes: M PLUS 1 Code (AA) for 20/16, PixelMplus10 (dot-by-dot) for 10
+FONT_SIZE_LARGE = 20
+FONT_SIZE_MEDIUM = 16
+FONT_SIZE_SMALL = 10
 
 _font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
 
 
-def load_font(weight: str = "regular", size: int = 10) -> ImageFont.FreeTypeFont:
-    """Load a bundled PixelMplus10 font with caching."""
+def load_font(weight: str = "regular", size: int = FONT_SIZE_SMALL) -> ImageFont.FreeTypeFont:
+    """Load a bundled font with caching.
+
+    Uses M PLUS 1 Code (antialiased) for sizes > 10,
+    PixelMplus10 (pixel-perfect) for size 10.
+    """
     key = (weight, size)
     if key not in _font_cache:
         suffix = "Bold" if weight == "bold" else "Regular"
-        font_name = f"PixelMplus10-{suffix}.ttf"
+        if size <= FONT_SIZE_SMALL:
+            font_name = f"PixelMplus10-{suffix}.ttf"
+        else:
+            font_name = f"Mplus1Code-{suffix}.ttf"
         font_path = files("cc_streamdeck.fonts").joinpath(font_name)
         _font_cache[key] = ImageFont.truetype(str(font_path), size)
     return _font_cache[key]
 
 
 def compute_layout(num_choices: int) -> tuple[list[int], list[int]]:
-    """Return (message_keys, choice_keys) for a given number of choices.
+    """Return (message_only_keys, choice_keys) for a given number of choices.
+
+    All 6 keys display message text. Choice keys additionally show
+    a label strip at the bottom (CHOICE_LABEL_HEIGHT pixels).
 
     Stream Deck Mini layout (key indices):
         [0] [1] [2]
         [3] [4] [5]
     """
     if num_choices >= 3:
-        return ([0, 1, 2], [3, 4, 5])
+        # Deny(3), Always(4), Allow(5)
+        return ([0, 1, 2], [5, 3, 4])
     elif num_choices == 2:
-        return ([0, 1, 2, 3], [4, 5])
+        # Right to left: Allow(5), Deny(4)
+        return ([0, 1, 2, 3], [5, 4])
     else:
         return ([0, 1, 2, 3, 4], [5])
 
@@ -66,7 +81,6 @@ def extract_display_content(tool_name: str, tool_input: dict) -> str:
     field = field_map.get(tool_name)
     if field and field in tool_input:
         return str(tool_input[field])
-    # Fallback: first non-empty string value
     for v in tool_input.values():
         if isinstance(v, str) and v:
             return v
@@ -83,8 +97,7 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[
         current = ""
         for char in paragraph:
             test = current + char
-            bbox = font.getbbox(test)
-            if bbox[2] - bbox[0] > max_width:
+            if font.getlength(test) > max_width:
                 if current:
                     lines.append(current)
                 current = char
@@ -100,126 +113,174 @@ def _key_position(key: int) -> tuple[int, int]:
     return (key % GRID_COLS, key // GRID_COLS)
 
 
-def create_message_tiles(
+def _render_text_on_canvas(
+    vw: int,
+    vh: int,
+    text_max_y: int,
     tool_name: str,
-    tool_input: dict,
-    message_keys: list[int],
-) -> dict[int, Image.Image]:
-    """Create per-key tile images for the message area.
-
-    Renders text onto a gap-free virtual canvas (visible area only),
-    then splits into per-key 80x80 tiles. This ensures no text falls
-    into the physical gap between buttons.
-    """
-    positions = [_key_position(k) for k in message_keys]
-    min_col = min(c for c, _ in positions)
-    max_col = max(c for c, _ in positions)
-    min_row = min(r for _, r in positions)
-    max_row = max(r for _, r in positions)
-
-    num_cols = max_col - min_col + 1
-    num_rows = max_row - min_row + 1
-
-    # Gap-free virtual canvas: only visible pixels
-    vw = num_cols * KEY_PIXEL_SIZE[0]
-    vh = num_rows * KEY_PIXEL_SIZE[1]
-
+    content: str,
+    font_size: int,
+) -> Image.Image:
+    """Render header + content text on a virtual canvas."""
     virtual = Image.new("RGB", (vw, vh), "black")
     draw = ImageDraw.Draw(virtual)
 
-    font_bold = load_font("bold", 20)
-    font_regular = load_font("regular", 20)
+    font_bold = load_font("bold", font_size)
+    font_regular = load_font("regular", font_size)
+    _, descent = font_bold.getmetrics()
+    line_height = font_size
+
+    # Shift everything up by descent so text starts at pixel y=0
+    y = -descent
 
     # Tool name header
-    draw.text((2, 0), tool_name, font=font_bold, fill="#00BFFF")
-    header_height = font_bold.getbbox(tool_name)[3] + 4
+    draw.text((0, y), tool_name, font=font_bold, fill="#00BFFF")
+    y += line_height
 
     # Content text
-    content = extract_display_content(tool_name, tool_input)
-    wrapped = _wrap_text(content, font_regular, vw - 4)
+    wrapped = _wrap_text(content, font_regular, vw)
 
-    y = header_height
-    line_height = 20
-    for line in wrapped:
-        if y + line_height > vh:
+    for i, line in enumerate(wrapped):
+        if y + line_height > text_max_y:
             break
-        draw.text((2, y), line, font=font_regular, fill="white")
+        # Show "..." on last visible line if more content follows
+        next_overflows = y + 2 * line_height > text_max_y
+        if next_overflows and i < len(wrapped) - 1:
+            line = line.rstrip() + "..."
+        draw.text((0, y), line, font=font_regular, fill="white")
         y += line_height
 
-    # Split virtual canvas into per-key tiles
-    tiles: dict[int, Image.Image] = {}
-    for key in message_keys:
-        col, row = _key_position(key)
-        rel_col = col - min_col
-        rel_row = row - min_row
-        x = rel_col * KEY_PIXEL_SIZE[0]
-        y = rel_row * KEY_PIXEL_SIZE[1]
-        tiles[key] = virtual.crop((x, y, x + KEY_PIXEL_SIZE[0], y + KEY_PIXEL_SIZE[1]))
-
-    return tiles
+    return virtual
 
 
-def create_choice_image(choice: PermissionChoice) -> Image.Image:
-    """Create an 80x80 image for a choice button."""
+def _text_fits(
+    vw: int,
+    text_max_y: int,
+    tool_name: str,
+    content: str,
+    font_size: int,
+) -> bool:
+    """Check if all text fits within the available area at the given font size."""
+    font_bold = load_font("bold", font_size)
+    font_regular = load_font("regular", font_size)
+    _, descent = font_bold.getmetrics()
+    line_height = font_size
+
+    wrapped = _wrap_text(content, font_regular, vw)
+    needed_y = -descent + (1 + len(wrapped)) * line_height
+    return needed_y <= text_max_y
+
+
+def _choose_font_size(
+    vw: int,
+    text_max_y: int,
+    tool_name: str,
+    content: str,
+) -> int:
+    """Select the best font size: 20 -> 16 -> 10, picking the largest that fits."""
+    for size in [FONT_SIZE_LARGE, FONT_SIZE_MEDIUM, FONT_SIZE_SMALL]:
+        if _text_fits(vw, text_max_y, tool_name, content, size):
+            return size
+    # Nothing fits — use smallest and truncate with "..."
+    return FONT_SIZE_SMALL
+
+
+def _choice_appearance(choice: PermissionChoice, always_active: bool) -> tuple[str, str]:
+    """Return (label, bg_color) for a choice button."""
+    if choice.updated_permissions:
+        if always_active:
+            return (choice.label, CHOICE_COLORS["always_on"])
+        return (choice.label, CHOICE_COLORS["always_off"])
     if choice.behavior == "deny":
-        bg = CHOICE_COLORS["deny"]
-    elif choice.updated_permissions:
-        bg = CHOICE_COLORS["always"]
-    else:
-        bg = CHOICE_COLORS["allow"]
+        return (choice.label, CHOICE_COLORS["deny"])
+    if always_active:
+        return (choice.label, CHOICE_COLORS["allow_always"])
+    return (choice.label, CHOICE_COLORS["allow"])
 
-    img = Image.new("RGB", KEY_PIXEL_SIZE, bg)
-    draw = ImageDraw.Draw(img)
-    font = load_font("bold", 20)
 
+def _overlay_choice_label(tile: Image.Image, label: str, bg_color: str) -> Image.Image:
+    """Overlay a colored choice label strip at the bottom of a tile."""
+    tile = tile.copy()
+    draw = ImageDraw.Draw(tile)
+
+    y_top = KEY_PIXEL_SIZE[1] - CHOICE_LABEL_HEIGHT
+    draw.rectangle(
+        [(0, y_top), (KEY_PIXEL_SIZE[0], KEY_PIXEL_SIZE[1])],
+        fill=bg_color,
+    )
+
+    font = load_font("bold", FONT_SIZE_LARGE)
     draw.text(
-        (KEY_PIXEL_SIZE[0] // 2, KEY_PIXEL_SIZE[1] // 2),
-        choice.label,
+        (KEY_PIXEL_SIZE[0] // 2, y_top + CHOICE_LABEL_HEIGHT // 2),
+        label,
         font=font,
         fill="white",
         anchor="mm",
     )
-    return img
+    return tile
+
+
+def render_permission_request(
+    request: PermissionRequest,
+    key_image_format: dict,
+    always_active: bool = False,
+) -> dict[int, bytes]:
+    """Render all 6 button images for a permission request.
+
+    All 6 buttons display message text. Choice buttons additionally
+    show a colored label strip at the bottom (CHOICE_LABEL_HEIGHT px).
+
+    Returns {key_index: native_format_bytes}.
+    """
+    num_choices = len(request.choices)
+    _, choice_keys = compute_layout(num_choices)
+
+    # Virtual canvas spans all 6 keys (gap-free)
+    vw = GRID_COLS * KEY_PIXEL_SIZE[0]
+    vh = GRID_ROWS * KEY_PIXEL_SIZE[1]
+
+    # Text must not overlap the choice label region
+    if choice_keys:
+        choice_row = max(k // GRID_COLS for k in choice_keys)
+        text_max_y = choice_row * KEY_PIXEL_SIZE[1] + (KEY_PIXEL_SIZE[1] - CHOICE_LABEL_HEIGHT)
+    else:
+        text_max_y = vh
+
+    tool_name = request.tool_name
+    content = extract_display_content(tool_name, request.tool_input)
+
+    # Adaptive font size: 20 → 16 → 10 (truncate at 10 if still overflows)
+    font_size = _choose_font_size(vw, text_max_y, tool_name, content)
+
+    virtual = _render_text_on_canvas(vw, vh, text_max_y, tool_name, content, font_size)
+
+    # Split into per-key tiles and overlay choice labels
+    result: dict[int, bytes] = {}
+    for key in range(GRID_COLS * GRID_ROWS):
+        col, row = _key_position(key)
+        x = col * KEY_PIXEL_SIZE[0]
+        y = row * KEY_PIXEL_SIZE[1]
+        tile = virtual.crop((x, y, x + KEY_PIXEL_SIZE[0], y + KEY_PIXEL_SIZE[1]))
+
+        if key in choice_keys:
+            idx = choice_keys.index(key)
+            if idx < num_choices:
+                label, bg_color = _choice_appearance(
+                    request.choices[idx], always_active
+                )
+                tile = _overlay_choice_label(tile, label, bg_color)
+
+        result[key] = pil_to_native(tile, key_image_format)
+
+    return result
 
 
 def pil_to_native(image: Image.Image, key_image_format: dict) -> bytes:
     """Convert a PIL image to Stream Deck native format."""
     from StreamDeck.ImageHelpers import PILHelper
 
-    # PILHelper.to_native_key_format needs a deck-like object
-    # We create a minimal wrapper
     class _FakeKey:
         def key_image_format(self):
             return key_image_format
 
     return PILHelper.to_native_key_format(_FakeKey(), image)
-
-
-def render_permission_request(
-    request: PermissionRequest,
-    key_image_format: dict,
-) -> dict[int, bytes]:
-    """Render all 6 button images for a permission request.
-
-    Returns {key_index: native_format_bytes}.
-    """
-    num_choices = len(request.choices)
-    message_keys, choice_keys = compute_layout(num_choices)
-
-    # Message area
-    tiles = create_message_tiles(request.tool_name, request.tool_input, message_keys)
-
-    result: dict[int, bytes] = {}
-
-    for key, tile in tiles.items():
-        result[key] = pil_to_native(tile, key_image_format)
-
-    # Choice buttons
-    for i, key in enumerate(choice_keys):
-        if i < num_choices:
-            choice_img = create_choice_image(request.choices[i])
-        else:
-            choice_img = Image.new("RGB", KEY_PIXEL_SIZE, "black")
-        result[key] = pil_to_native(choice_img, key_image_format)
-
-    return result

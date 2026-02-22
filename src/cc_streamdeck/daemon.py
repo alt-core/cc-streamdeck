@@ -27,6 +27,7 @@ class Daemon:
         self._response_event = threading.Event()
         self._response: PermissionResponse | None = None
         self._request_lock = threading.Lock()
+        self._always_active = False
         self._server_socket: socket.socket | None = None
         self._running = False
 
@@ -123,6 +124,18 @@ class Daemon:
             if not data:
                 return
 
+            # Check for stop command
+            import json
+
+            try:
+                msg = json.loads(data.decode("utf-8").strip())
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return
+            if msg.get("type") == "stop":
+                logger.info("Received stop command via socket")
+                self.shutdown()
+                return
+
             request = decode_request(data)
 
             with self._request_lock:
@@ -148,12 +161,13 @@ class Daemon:
         if key_format is None:
             return PermissionResponse(status="no_device")
 
-        images = render_permission_request(request, key_format)
-        self.device_state.set_key_images(images)
-
+        self._always_active = False
         self._current_request = request
         self._response_event.clear()
         self._response = None
+
+        images = render_permission_request(request, key_format)
+        self.device_state.set_key_images(images)
 
         if self._response_event.wait(timeout=590.0):
             response = self._response or PermissionResponse(
@@ -178,14 +192,73 @@ class Daemon:
         num_choices = len(self._current_request.choices)
         _, choice_keys = compute_layout(num_choices)
 
-        if key in choice_keys:
-            choice_idx = choice_keys.index(key)
-            if choice_idx < num_choices:
-                chosen = self._current_request.choices[choice_idx]
-                self._response = PermissionResponse(status="ok", chosen=chosen)
-                self._response_event.set()
+        if key not in choice_keys:
+            return
+
+        choice_idx = choice_keys.index(key)
+        if choice_idx >= num_choices:
+            return
+
+        chosen = self._current_request.choices[choice_idx]
+
+        # Always toggle: flip state and re-render, don't complete the request
+        if chosen.updated_permissions:
+            self._always_active = not self._always_active
+            self._rerender_current()
+            return
+
+        # Allow with Always active: send the Always choice instead
+        if chosen.behavior == "allow" and self._always_active:
+            always_choice = next(
+                (c for c in self._current_request.choices if c.updated_permissions),
+                None,
+            )
+            if always_choice:
+                chosen = always_choice
+
+        self._response = PermissionResponse(status="ok", chosen=chosen)
+        self._response_event.set()
+
+    def _rerender_current(self) -> None:
+        """Re-render current request with updated always_active state."""
+        if self._current_request is None:
+            return
+        key_format = self.device_state.get_key_image_format()
+        if key_format is None:
+            return
+        images = render_permission_request(
+            self._current_request, key_format, always_active=self._always_active
+        )
+        self.device_state.set_key_images(images)
+
+
+def _send_stop() -> bool:
+    """Send stop command to a running daemon. Returns True if successful."""
+    import json
+
+    if not SOCKET_PATH.exists():
+        return False
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(5.0)
+        sock.connect(str(SOCKET_PATH))
+        sock.sendall((json.dumps({"type": "stop"}) + "\n").encode())
+        sock.shutdown(socket.SHUT_WR)
+        sock.close()
+        return True
+    except (ConnectionRefusedError, FileNotFoundError, OSError):
+        return False
 
 
 def main() -> None:
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--stop":
+        if _send_stop():
+            print("Stop signal sent to daemon.")
+        else:
+            print("No running daemon found.")
+        return
+
     daemon = Daemon()
     daemon.start()
