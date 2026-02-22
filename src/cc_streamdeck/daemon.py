@@ -139,7 +139,7 @@ class Daemon:
             request = decode_request(data)
 
             with self._request_lock:
-                response = self._process_request(request)
+                response = self._process_request(request, conn)
 
             conn.sendall(encode(response))
         except Exception as e:
@@ -152,8 +152,14 @@ class Daemon:
         finally:
             conn.close()
 
-    def _process_request(self, request) -> PermissionResponse:
-        """Display request on Stream Deck and wait for button press."""
+    def _process_request(
+        self, request, conn: socket.socket | None = None
+    ) -> PermissionResponse:
+        """Display request on Stream Deck and wait for button press.
+
+        Monitors the hook client connection: if the client is killed
+        (e.g. user responded on terminal), the display is cleared immediately.
+        """
         if self.device_state.status != "ready":
             return PermissionResponse(status="no_device")
 
@@ -169,7 +175,30 @@ class Daemon:
         images = render_permission_request(request, key_format)
         self.device_state.set_key_images(images)
 
-        if self._response_event.wait(timeout=590.0):
+        # Poll with 1-second intervals, probing client connection each time
+        elapsed = 0.0
+        client_alive = True
+        while elapsed < 590.0:
+            if self._response_event.wait(timeout=1.0):
+                break
+            elapsed += 1.0
+            # Probe hook client connection
+            if conn is not None and client_alive:
+                try:
+                    conn.sendall(b"\n")
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    logger.info("Hook client disconnected, clearing display")
+                    client_alive = False
+                    break
+
+        if not client_alive:
+            self.device_state.clear_keys()
+            self._current_request = None
+            return PermissionResponse(
+                status="error", error_message="Client disconnected"
+            )
+
+        if self._response_event.is_set():
             response = self._response or PermissionResponse(
                 status="error", error_message="No response"
             )

@@ -1,5 +1,7 @@
 """Tests for Daemon socket communication."""
 
+import socket
+import threading
 from unittest.mock import MagicMock, patch
 
 from cc_streamdeck.daemon import Daemon
@@ -139,3 +141,56 @@ class TestDaemonProcessRequest:
         req = PermissionRequest(tool_name="Bash", tool_input={"command": "ls"})
         resp = daemon._process_request(req)
         assert resp.status == "no_device"
+
+    def test_client_disconnect_clears_display(self, sample_request):
+        """When hook client dies, daemon detects and clears Stream Deck."""
+        daemon = Daemon()
+        daemon.device_state = MagicMock()
+        daemon.device_state.status = "ready"
+        daemon.device_state.get_key_image_format.return_value = {
+            "size": (80, 80),
+            "format": "BMP",
+            "flip": (False, True),
+            "rotation": 90,
+        }
+
+        # Create a real socket pair so sendall raises on close
+        server_sock, client_sock = socket.socketpair()
+        client_sock.close()  # Simulate hook process killed
+
+        resp = daemon._process_request(sample_request, server_sock)
+        server_sock.close()
+
+        assert resp.status == "error"
+        assert "disconnected" in resp.error_message.lower()
+        daemon.device_state.clear_keys.assert_called_once()
+
+    def test_button_press_still_works_with_conn(self, sample_request):
+        """Button press resolves normally even when conn monitoring is active."""
+        daemon = Daemon()
+        daemon.device_state = MagicMock()
+        daemon.device_state.status = "ready"
+        daemon.device_state.get_key_image_format.return_value = {
+            "size": (80, 80),
+            "format": "BMP",
+            "flip": (False, True),
+            "rotation": 90,
+        }
+
+        server_sock, client_sock = socket.socketpair()
+
+        # Simulate button press after a short delay
+        def press_allow():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 5, True)
+
+        t = threading.Thread(target=press_allow)
+        t.start()
+
+        resp = daemon._process_request(sample_request, server_sock)
+        t.join()
+        server_sock.close()
+        client_sock.close()
+
+        assert resp.status == "ok"
+        assert resp.chosen.label == "Allow"

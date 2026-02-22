@@ -82,9 +82,22 @@ def _try_connect() -> socket.socket | None:
 
 
 def _start_daemon() -> None:
-    """Start the daemon process in the background."""
+    """Start the daemon process in the background.
+
+    Resolves cc-streamdeck-daemon from the same directory as this script,
+    so it works even when the .venv/bin is not on PATH.
+    """
+    import shutil
+    from pathlib import Path
+
+    # Look for daemon next to the running hook script
+    hook_dir = Path(sys.executable).parent
+    daemon_path = hook_dir / "cc-streamdeck-daemon"
+    if not daemon_path.exists():
+        daemon_path = shutil.which("cc-streamdeck-daemon") or "cc-streamdeck-daemon"
+
     subprocess.Popen(
-        ["cc-streamdeck-daemon"],
+        [str(daemon_path)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

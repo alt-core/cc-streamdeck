@@ -149,39 +149,44 @@ class TestRenderTextOnCanvas:
 class TestChoiceAppearance:
     def test_allow_normal(self):
         choice = PermissionChoice(label="Allow", behavior="allow")
-        label, color = _choice_appearance(choice, always_active=False)
+        label, color, text_color = _choice_appearance(choice, always_active=False)
         assert label == "Allow"
         assert color == "#005000"
+        assert text_color == "white"
 
     def test_allow_with_always_active(self):
         choice = PermissionChoice(label="Allow", behavior="allow")
-        label, color = _choice_appearance(choice, always_active=True)
+        label, color, text_color = _choice_appearance(choice, always_active=True)
         assert label == "Allow"
-        assert color == "#000080"  # allow_always blue
+        assert color == "#0050D0"  # same as always_on
+        assert text_color == "white"
 
     def test_deny(self):
         choice = PermissionChoice(label="Deny", behavior="deny")
-        label, color = _choice_appearance(choice, always_active=False)
+        label, color, text_color = _choice_appearance(choice, always_active=False)
         assert label == "Deny"
         assert color == "#800000"
+        assert text_color == "white"
 
     def test_always_inactive(self):
         choice = PermissionChoice(
             label="Always", behavior="allow",
             updated_permissions=[{"type": "toolAlwaysAllow"}],
         )
-        label, color = _choice_appearance(choice, always_active=False)
+        label, color, text_color = _choice_appearance(choice, always_active=False)
         assert label == "Always"
         assert color == "#000040"  # always_off
+        assert text_color == "#808080"  # gray when inactive
 
     def test_always_active(self):
         choice = PermissionChoice(
             label="Always", behavior="allow",
             updated_permissions=[{"type": "toolAlwaysAllow"}],
         )
-        label, color = _choice_appearance(choice, always_active=True)
+        label, color, text_color = _choice_appearance(choice, always_active=True)
         assert label == "Always"
         assert color == "#0050D0"  # always_on
+        assert text_color == "white"
 
 
 class TestOverlayChoiceLabel:

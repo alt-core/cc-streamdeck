@@ -17,7 +17,7 @@ CHOICE_COLORS = {
     "deny": "#800000",
     "always_off": "#000040",
     "always_on": "#0050D0",
-    "allow_always": "#000080",
+    "allow_always": "#0050D0",
 }
 
 # Font sizes: M PLUS 1 Code (AA) for 20/16, PixelMplus10 (dot-by-dot) for 10
@@ -125,17 +125,18 @@ def _render_text_on_canvas(
     virtual = Image.new("RGB", (vw, vh), "black")
     draw = ImageDraw.Draw(virtual)
 
-    font_bold = load_font("bold", font_size)
+    header_size = FONT_SIZE_LARGE if font_size == FONT_SIZE_SMALL else font_size
+    header_font = load_font("bold", header_size)
     font_regular = load_font("regular", font_size)
-    _, descent = font_bold.getmetrics()
+    _, header_descent = header_font.getmetrics()
     line_height = font_size
 
-    # Shift everything up by descent so text starts at pixel y=0
-    y = -descent
+    # Shift header up by descent so text starts at pixel y=0
+    y = -header_descent
 
-    # Tool name header
-    draw.text((0, y), tool_name, font=font_bold, fill="#00BFFF")
-    y += line_height
+    # Tool name header (20px when content is 10px, otherwise same as content)
+    draw.text((0, y), f" {tool_name}", font=header_font, fill="#00BFFF")
+    y += header_size
 
     # Content text
     wrapped = _wrap_text(content, font_regular, vw)
@@ -161,13 +162,14 @@ def _text_fits(
     font_size: int,
 ) -> bool:
     """Check if all text fits within the available area at the given font size."""
-    font_bold = load_font("bold", font_size)
+    header_size = FONT_SIZE_LARGE if font_size == FONT_SIZE_SMALL else font_size
+    header_font = load_font("bold", header_size)
     font_regular = load_font("regular", font_size)
-    _, descent = font_bold.getmetrics()
+    _, header_descent = header_font.getmetrics()
     line_height = font_size
 
     wrapped = _wrap_text(content, font_regular, vw)
-    needed_y = -descent + (1 + len(wrapped)) * line_height
+    needed_y = -header_descent + header_size + len(wrapped) * line_height
     return needed_y <= text_max_y
 
 
@@ -185,20 +187,22 @@ def _choose_font_size(
     return FONT_SIZE_SMALL
 
 
-def _choice_appearance(choice: PermissionChoice, always_active: bool) -> tuple[str, str]:
-    """Return (label, bg_color) for a choice button."""
+def _choice_appearance(choice: PermissionChoice, always_active: bool) -> tuple[str, str, str]:
+    """Return (label, bg_color, text_color) for a choice button."""
     if choice.updated_permissions:
         if always_active:
-            return (choice.label, CHOICE_COLORS["always_on"])
-        return (choice.label, CHOICE_COLORS["always_off"])
+            return (choice.label, CHOICE_COLORS["always_on"], "white")
+        return (choice.label, CHOICE_COLORS["always_off"], "#808080")
     if choice.behavior == "deny":
-        return (choice.label, CHOICE_COLORS["deny"])
+        return (choice.label, CHOICE_COLORS["deny"], "white")
     if always_active:
-        return (choice.label, CHOICE_COLORS["allow_always"])
-    return (choice.label, CHOICE_COLORS["allow"])
+        return (choice.label, CHOICE_COLORS["allow_always"], "white")
+    return (choice.label, CHOICE_COLORS["allow"], "white")
 
 
-def _overlay_choice_label(tile: Image.Image, label: str, bg_color: str) -> Image.Image:
+def _overlay_choice_label(
+    tile: Image.Image, label: str, bg_color: str, text_color: str = "white"
+) -> Image.Image:
     """Overlay a colored choice label strip at the bottom of a tile."""
     tile = tile.copy()
     draw = ImageDraw.Draw(tile)
@@ -214,7 +218,7 @@ def _overlay_choice_label(tile: Image.Image, label: str, bg_color: str) -> Image
         (KEY_PIXEL_SIZE[0] // 2, y_top + CHOICE_LABEL_HEIGHT // 2),
         label,
         font=font,
-        fill="white",
+        fill=text_color,
         anchor="mm",
     )
     return tile
@@ -265,10 +269,10 @@ def render_permission_request(
         if key in choice_keys:
             idx = choice_keys.index(key)
             if idx < num_choices:
-                label, bg_color = _choice_appearance(
+                label, bg_color, text_color = _choice_appearance(
                     request.choices[idx], always_active
                 )
-                tile = _overlay_choice_label(tile, label, bg_color)
+                tile = _overlay_choice_label(tile, label, bg_color, text_color)
 
         result[key] = pil_to_native(tile, key_image_format)
 
