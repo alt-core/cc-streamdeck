@@ -348,17 +348,22 @@ def render_fallback_message(
 
     # Body message
     y = FONT_SIZE_LARGE + 4
-    for line in ["→ ターミナルで操作", "", "(押すと閉じる)"]:
+    for line in ["See Claude Code"]:
         draw.text((0, y), line, font=body_font, fill="#C0C0C0")
         y += FONT_SIZE_MEDIUM
 
-    # Split into tiles
+    # OK button on bottom-right (same position as Allow)
+    ok_key = grid_cols * grid_rows - 1
+
+    # Split into tiles and overlay OK label
     result: dict[int, bytes] = {}
     for key in range(grid_cols * grid_rows):
         col, row = _key_position(key, grid_cols)
         x = col * key_w
         y = row * key_h
         tile = virtual.crop((x, y, x + key_w, y + key_h))
+        if key == ok_key:
+            tile = _overlay_choice_label(tile, "OK", "#404040")
         result[key] = pil_to_native(tile, key_image_format)
 
     return result
