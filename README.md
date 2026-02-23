@@ -27,7 +27,8 @@ Claude Code → PermissionRequest Hook → Hook Client → Unix Socket → Daemo
 ## 前提条件
 
 - macOS または Linux
-- Stream Deck Mini（Discord Edition 含む）
+- Stream Deck（Mini, Original/MK.2, XL, Plus）
+  > 動作確認は Stream Deck Mini のみで行っています（作者の手元にある機種のため）。レイアウトはデバイスのグリッドサイズから動的に計算されるため、他モデルでも動作する想定ですが、Mini 以外は未検証です。
 - [Claude Code](https://claude.ai/code) CLI
 - Python 3.11+
 - hidapi:

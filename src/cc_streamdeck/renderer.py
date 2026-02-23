@@ -6,7 +6,7 @@ from importlib.resources import files
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .config import GRID_COLS, GRID_ROWS, KEY_PIXEL_SIZE
+from .config import GRID_COLS, GRID_ROWS
 from .protocol import PermissionChoice, PermissionRequest
 
 # Height of the choice label strip at the bottom of choice keys
@@ -46,24 +46,42 @@ def load_font(weight: str = "regular", size: int = FONT_SIZE_SMALL) -> ImageFont
     return _font_cache[key]
 
 
-def compute_layout(num_choices: int) -> tuple[list[int], list[int]]:
+def compute_layout(
+    num_choices: int, grid_cols: int = GRID_COLS, grid_rows: int = GRID_ROWS
+) -> tuple[list[int], list[int]]:
     """Return (message_only_keys, choice_keys) for a given number of choices.
 
-    All 6 keys display message text. Choice keys additionally show
+    All keys display message text. Choice keys additionally show
     a label strip at the bottom (CHOICE_LABEL_HEIGHT pixels).
 
-    Stream Deck Mini layout (key indices):
-        [0] [1] [2]
-        [3] [4] [5]
+    Choice keys are placed on the bottom row, right-aligned:
+    - Allow = bottom-right (always present)
+    - Deny = left of Allow
+    - Always = between Deny and Allow (if 3 choices)
+
+    Works for any grid size (3x2 Mini, 5x3 Original, 4x2 Plus, etc.).
     """
+    total_keys = grid_cols * grid_rows
+    all_keys = list(range(total_keys))
+
+    # Bottom-right key is always Allow
+    bottom_right = total_keys - 1
+
     if num_choices >= 3:
-        # Deny(3), Always(4), Allow(5)
-        return ([0, 1, 2], [5, 3, 4])
+        # Allow(right), Deny(right-2), Always(right-1)
+        allow_key = bottom_right
+        always_key = bottom_right - 1
+        deny_key = bottom_right - 2
+        choice_keys = [allow_key, deny_key, always_key]
     elif num_choices == 2:
-        # Right to left: Allow(5), Deny(4)
-        return ([0, 1, 2, 3], [5, 4])
+        allow_key = bottom_right
+        deny_key = bottom_right - 1
+        choice_keys = [allow_key, deny_key]
     else:
-        return ([0, 1, 2, 3, 4], [5])
+        choice_keys = [bottom_right]
+
+    msg_keys = [k for k in all_keys if k not in choice_keys]
+    return (msg_keys, choice_keys)
 
 
 def extract_display_content(tool_name: str, tool_input: dict) -> str:
@@ -108,9 +126,9 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[
     return lines
 
 
-def _key_position(key: int) -> tuple[int, int]:
+def _key_position(key: int, grid_cols: int = GRID_COLS) -> tuple[int, int]:
     """Return (col, row) for a key index."""
-    return (key % GRID_COLS, key // GRID_COLS)
+    return (key % grid_cols, key // grid_cols)
 
 
 def _render_text_on_canvas(
@@ -213,16 +231,17 @@ def _overlay_choice_label(
     """Overlay a colored choice label strip at the bottom of a tile."""
     tile = tile.copy()
     draw = ImageDraw.Draw(tile)
+    tw, th = tile.size
 
-    y_top = KEY_PIXEL_SIZE[1] - CHOICE_LABEL_HEIGHT
+    y_top = th - CHOICE_LABEL_HEIGHT
     draw.rectangle(
-        [(0, y_top), (KEY_PIXEL_SIZE[0], KEY_PIXEL_SIZE[1])],
+        [(0, y_top), (tw, th)],
         fill=bg_color,
     )
 
     font = load_font("bold", FONT_SIZE_LARGE)
     draw.text(
-        (KEY_PIXEL_SIZE[0] // 2, y_top + CHOICE_LABEL_HEIGHT // 2),
+        (tw // 2, y_top + CHOICE_LABEL_HEIGHT // 2),
         label,
         font=font,
         fill=text_color,
@@ -239,25 +258,30 @@ def render_permission_request(
     header_bg_color: str = "#101010",
     header_fg_color: str = "#808080",
     body_fg_color: str = "white",
+    grid_cols: int = GRID_COLS,
+    grid_rows: int = GRID_ROWS,
 ) -> dict[int, bytes]:
-    """Render all 6 button images for a permission request.
+    """Render button images for a permission request.
 
-    All 6 buttons display message text. Choice buttons additionally
+    All buttons display message text. Choice buttons additionally
     show a colored label strip at the bottom (CHOICE_LABEL_HEIGHT px).
 
     Returns {key_index: native_format_bytes}.
     """
     num_choices = len(request.choices)
-    _, choice_keys = compute_layout(num_choices)
+    _, choice_keys = compute_layout(num_choices, grid_cols, grid_rows)
 
-    # Virtual canvas spans all 6 keys (gap-free)
-    vw = GRID_COLS * KEY_PIXEL_SIZE[0]
-    vh = GRID_ROWS * KEY_PIXEL_SIZE[1]
+    # Key pixel size from format (device-dependent)
+    key_w, key_h = key_image_format["size"]
+
+    # Virtual canvas spans all keys (gap-free)
+    vw = grid_cols * key_w
+    vh = grid_rows * key_h
 
     # Text must not overlap the choice label region
     if choice_keys:
-        choice_row = max(k // GRID_COLS for k in choice_keys)
-        text_max_y = choice_row * KEY_PIXEL_SIZE[1] + (KEY_PIXEL_SIZE[1] - CHOICE_LABEL_HEIGHT)
+        choice_row = max(k // grid_cols for k in choice_keys)
+        text_max_y = choice_row * key_h + (key_h - CHOICE_LABEL_HEIGHT)
     else:
         text_max_y = vh
 
@@ -277,11 +301,11 @@ def render_permission_request(
 
     # Split into per-key tiles and overlay choice labels
     result: dict[int, bytes] = {}
-    for key in range(GRID_COLS * GRID_ROWS):
-        col, row = _key_position(key)
-        x = col * KEY_PIXEL_SIZE[0]
-        y = row * KEY_PIXEL_SIZE[1]
-        tile = virtual.crop((x, y, x + KEY_PIXEL_SIZE[0], y + KEY_PIXEL_SIZE[1]))
+    for key in range(grid_cols * grid_rows):
+        col, row = _key_position(key, grid_cols)
+        x = col * key_w
+        y = row * key_h
+        tile = virtual.crop((x, y, x + key_w, y + key_h))
 
         if key in choice_keys:
             idx = choice_keys.index(key)

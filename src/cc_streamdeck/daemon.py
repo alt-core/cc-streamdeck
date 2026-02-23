@@ -38,11 +38,13 @@ class Daemon:
         self._settings = load_settings()
         self._risk_config: RiskConfig = load_risk_config(self._settings)
         self._seen_pids: list[int] = []
-        # Cached render colors for rerender
+        # Cached render params for rerender
         self._current_bg_color: str = "black"
         self._current_header_bg: str = "#101010"
         self._current_header_fg: str = "#808080"
         self._current_body_fg: str = "white"
+        self._current_grid_cols: int = 3
+        self._current_grid_rows: int = 2
 
     def start(self) -> None:
         """Main entry point for the daemon."""
@@ -200,9 +202,19 @@ class Daemon:
         if key_format is None:
             return PermissionResponse(status="no_device")
 
+        # Get grid layout from device
+        grid_info = self.device_state.get_grid_layout()
+        if grid_info is not None:
+            grid_rows, grid_cols, _ = grid_info
+        else:
+            from .config import GRID_COLS, GRID_ROWS
+            grid_cols, grid_rows = GRID_COLS, GRID_ROWS
+
         self._always_active = False
         self._current_request = request
         self._current_client_pid = request.client_pid
+        self._current_grid_cols = grid_cols
+        self._current_grid_rows = grid_rows
         self._response_event.clear()
         self._response = None
 
@@ -233,6 +245,8 @@ class Daemon:
             header_bg_color=header_bg,
             header_fg_color=header_fg,
             body_fg_color=body_fg,
+            grid_cols=grid_cols,
+            grid_rows=grid_rows,
         )
         self.device_state.set_key_images(images)
 
@@ -287,7 +301,9 @@ class Daemon:
             return
 
         num_choices = len(self._current_request.choices)
-        _, choice_keys = compute_layout(num_choices)
+        _, choice_keys = compute_layout(
+            num_choices, self._current_grid_cols, self._current_grid_rows
+        )
 
         if key not in choice_keys:
             return
@@ -329,6 +345,8 @@ class Daemon:
             header_bg_color=self._current_header_bg,
             header_fg_color=self._current_header_fg,
             body_fg_color=self._current_body_fg,
+            grid_cols=self._current_grid_cols,
+            grid_rows=self._current_grid_rows,
         )
         self.device_state.set_key_images(images)
 

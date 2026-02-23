@@ -40,6 +40,37 @@ class TestComputeLayout:
             msg_keys, choice_keys = compute_layout(n)
             assert sorted(msg_keys + choice_keys) == [0, 1, 2, 3, 4, 5]
 
+    # 5x3 (15-key Original/MK.2)
+    def test_15key_three_choices(self):
+        msg_keys, choice_keys = compute_layout(3, grid_cols=5, grid_rows=3)
+        # Allow=14 (bottom-right), Deny=12, Always=13
+        assert choice_keys == [14, 12, 13]
+        assert len(msg_keys) == 12
+        assert sorted(msg_keys + choice_keys) == list(range(15))
+
+    def test_15key_two_choices(self):
+        msg_keys, choice_keys = compute_layout(2, grid_cols=5, grid_rows=3)
+        assert choice_keys == [14, 13]
+        assert len(msg_keys) == 13
+
+    def test_15key_all_keys_covered(self):
+        for n in [1, 2, 3]:
+            msg_keys, choice_keys = compute_layout(n, grid_cols=5, grid_rows=3)
+            assert sorted(msg_keys + choice_keys) == list(range(15))
+
+    # 4x2 (8-key Plus)
+    def test_8key_three_choices(self):
+        msg_keys, choice_keys = compute_layout(3, grid_cols=4, grid_rows=2)
+        # Allow=7 (bottom-right), Deny=5, Always=6
+        assert choice_keys == [7, 5, 6]
+        assert sorted(msg_keys + choice_keys) == list(range(8))
+
+    # 8x4 (32-key XL)
+    def test_32key_three_choices(self):
+        msg_keys, choice_keys = compute_layout(3, grid_cols=8, grid_rows=4)
+        assert choice_keys == [31, 29, 30]
+        assert sorted(msg_keys + choice_keys) == list(range(32))
+
 
 class TestExtractDisplayContent:
     def test_bash_command(self):

@@ -103,6 +103,14 @@ class DeviceState:
                 return None
             return self._deck.key_image_format()
 
+    def get_grid_layout(self) -> tuple[int, int, int] | None:
+        """Return (rows, cols, key_count) from the device, or None if no device."""
+        with self._lock:
+            if self._deck is None:
+                return None
+            rows, cols = self._deck.key_layout()
+            return (rows, cols, self._deck.key_count())
+
     def clear_keys(self) -> None:
         """Clear all keys to black."""
         with self._lock:

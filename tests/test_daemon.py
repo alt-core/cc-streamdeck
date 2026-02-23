@@ -153,6 +153,7 @@ class TestDaemonProcessRequest:
             "flip": (False, True),
             "rotation": 90,
         }
+        daemon.device_state.get_grid_layout.return_value = (2, 3, 6)
 
         # Create a real socket pair so sendall raises on close
         server_sock, client_sock = socket.socketpair()
@@ -176,6 +177,7 @@ class TestDaemonProcessRequest:
             "flip": (False, True),
             "rotation": 90,
         }
+        daemon.device_state.get_grid_layout.return_value = (2, 3, 6)
 
         # Give the request a client_pid
         sample_request.client_pid = 12345
@@ -206,6 +208,7 @@ class TestDaemonProcessRequest:
             "flip": (False, True),
             "rotation": 90,
         }
+        daemon.device_state.get_grid_layout.return_value = (2, 3, 6)
 
         server_sock, client_sock = socket.socketpair()
 
