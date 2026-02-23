@@ -181,7 +181,12 @@ class TestRenderTextOnCanvas:
         vh = GRID_ROWS * KEY_PIXEL_SIZE[1]
         # Render with a non-black body background
         img = _render_text_on_canvas(
-            vw, vh, vh, "Bash", "ls", FONT_SIZE_LARGE,
+            vw,
+            vh,
+            vh,
+            "Bash",
+            "ls",
+            FONT_SIZE_LARGE,
             bg_color="#0A0A20",
         )
         # Check that the image has blue channel values from the bg
@@ -193,7 +198,12 @@ class TestRenderTextOnCanvas:
         vw = GRID_COLS * KEY_PIXEL_SIZE[0]
         vh = GRID_ROWS * KEY_PIXEL_SIZE[1]
         img = _render_text_on_canvas(
-            vw, vh, vh, "Bash", "ls", FONT_SIZE_LARGE,
+            vw,
+            vh,
+            vh,
+            "Bash",
+            "ls",
+            FONT_SIZE_LARGE,
             header_bg_color="#800000",
         )
         # Top-left area should have red from header background
@@ -226,7 +236,8 @@ class TestChoiceAppearance:
 
     def test_always_inactive(self):
         choice = PermissionChoice(
-            label="Always", behavior="allow",
+            label="Always",
+            behavior="allow",
             updated_permissions=[{"type": "toolAlwaysAllow"}],
         )
         label, color, text_color = _choice_appearance(choice, always_active=False)
@@ -236,7 +247,8 @@ class TestChoiceAppearance:
 
     def test_always_active(self):
         choice = PermissionChoice(
-            label="Always", behavior="allow",
+            label="Always",
+            behavior="allow",
             updated_permissions=[{"type": "toolAlwaysAllow"}],
         )
         label, color, text_color = _choice_appearance(choice, always_active=True)
@@ -267,7 +279,9 @@ class TestOverlayChoiceLabel:
         tile = Image.new("RGB", KEY_PIXEL_SIZE, "black")
         result = _overlay_choice_label(tile, "Allow", "#005000")
         # Check the bottom strip has non-black pixels
-        bottom = result.crop((0, KEY_PIXEL_SIZE[1] - CHOICE_LABEL_HEIGHT, KEY_PIXEL_SIZE[0], KEY_PIXEL_SIZE[1]))
+        bottom = result.crop(
+            (0, KEY_PIXEL_SIZE[1] - CHOICE_LABEL_HEIGHT, KEY_PIXEL_SIZE[0], KEY_PIXEL_SIZE[1])
+        )
         extrema = bottom.getextrema()
         assert any(ch[1] > 0 for ch in extrema)
 
@@ -305,9 +319,7 @@ class TestRenderPermissionRequest:
     def test_always_active_renders(self, sample_request):
         from cc_streamdeck.renderer import render_permission_request
 
-        result = render_permission_request(
-            sample_request, self.MOCK_FORMAT, always_active=True
-        )
+        result = render_permission_request(sample_request, self.MOCK_FORMAT, always_active=True)
         assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
         for v in result.values():
             assert isinstance(v, bytes)

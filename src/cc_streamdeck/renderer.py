@@ -292,7 +292,12 @@ def render_permission_request(
     font_size = _choose_font_size(vw, text_max_y, tool_name, content)
 
     virtual = _render_text_on_canvas(
-        vw, vh, text_max_y, tool_name, content, font_size,
+        vw,
+        vh,
+        text_max_y,
+        tool_name,
+        content,
+        font_size,
         bg_color=bg_color,
         header_bg_color=header_bg_color,
         header_fg_color=header_fg_color,
