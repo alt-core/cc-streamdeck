@@ -441,6 +441,62 @@ class TestDaemonAskQuestion:
         assert resp.status == "ok"
         assert resp.ask_answers["First question?"] == "A2"
 
+    def test_empty_key_ignored(self, ask_question_request):
+        """Pressing empty keys (not option/control) should be ignored."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            # 3 options on 3x2: keys 0,1,2=options, 3=cancel, 4=empty, 5=submit
+            daemon._key_callback(None, 4, True)  # Empty key — ignored
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 0, True)  # Select A
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Submit
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_question_request)
+        t.join()
+
+        assert resp.status == "ok"
+        assert resp.ask_answers == {"Which approach?": "Option A"}
+
+    def test_confirm_page_empty_key_ignored(self, ask_multi_question_request):
+        """Empty keys on confirm page should be ignored."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 0, True)  # Select A1
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Next
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 0, True)  # Select B1
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Go to confirm
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 0, True)  # Empty key on confirm — ignored
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 1, True)  # Empty key on confirm — ignored
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 2, True)  # Empty key on confirm — ignored
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 4, True)  # Empty key on confirm — ignored
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Submit
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_multi_question_request)
+        t.join()
+
+        assert resp.status == "ok"
+        assert resp.ask_answers == {
+            "First question?": "A1",
+            "Second question?": "B1",
+        }
+
     def test_multi_page_cancel_on_first_page(self, ask_multi_question_request):
         """Cancel on first page cancels the entire session."""
         daemon = self._make_ready_daemon()

@@ -520,10 +520,9 @@ class Daemon:
         is_multi_page = state.total_pages > 1
 
         if state.is_confirm_page:
-            # Confirmation page: Back + Cancel + Submit, no options
+            # Confirmation page: Back + Submit, no options
             controls = {
                 "back": "Back",
-                "cancel": "Cancel",
                 "submit": "Submit",
             }
             page_info = "Confirm"
@@ -539,6 +538,7 @@ class Daemon:
             options_data = q.get("options", [])
             max_options = total_keys - 2
             options = [opt["label"] for opt in options_data[:max_options]]
+            descriptions = [opt.get("description", "") for opt in options_data[:max_options]]
 
             # Get selected set for this page
             if is_multi:
@@ -555,12 +555,15 @@ class Daemon:
             else:
                 controls = {"back": "Back", "next": "Next"}
 
-            page_info = f"{state.current_page + 1}/{state.total_pages}" if is_multi_page else ""
+            header = q.get("header", "")
+            page_info = header
+            page_description = q.get("question", "")
 
             images = render_ask_question_page(
                 options=options, selected=selected, control_buttons=controls,
                 key_image_format=key_format, page_info=page_info,
-                bg_color=self._current_bg_color,
+                page_description=page_description,
+                bg_color=self._current_bg_color, descriptions=descriptions,
                 grid_cols=grid_cols, grid_rows=grid_rows,
             )
 
@@ -579,7 +582,7 @@ class Daemon:
         cancel_key = total_keys - grid_cols
 
         if state.is_confirm_page:
-            # Confirm page: cancel_key=Back, cancel_key+1=Cancel, submit_key=Submit
+            # Confirm page: cancel_key=Back, submit_key=Submit, others ignored
             if key == submit_key:
                 state.pending_action = "submit"
                 self._response_event.set()
@@ -587,9 +590,6 @@ class Daemon:
                 # Back to last question
                 state.is_confirm_page = False
                 state.pending_action = "navigate"
-                self._response_event.set()
-            elif key == cancel_key + 1:
-                state.pending_action = "cancel"
                 self._response_event.set()
             return
 

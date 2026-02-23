@@ -388,8 +388,10 @@ def _render_full_button(
     label: str,
     bg_color: str,
     fg_color: str = "white",
+    description: str = "",
+    desc_color: str = "#808080",
 ) -> Image.Image:
-    """Render a full-button label with auto-sized text."""
+    """Render a full-button label with auto-sized text and optional description."""
     w, h = size
     img = Image.new("RGB", (w, h), bg_color)
     draw = ImageDraw.Draw(img)
@@ -403,12 +405,41 @@ def _render_full_button(
         if total_height <= h - 4:
             break
 
-    # Center vertically
-    y_start = (h - total_height) // 2
+    if not description:
+        # Center vertically (no description)
+        y_start = (h - total_height) // 2
+        for i, line in enumerate(wrapped):
+            line_w = font.getlength(line)
+            x = (w - line_w) // 2
+            draw.text((x, y_start + i * line_height), line, font=font, fill=fg_color)
+        return img
+
+    # With description: label at top, description below
+    desc_font = load_font("regular", FONT_SIZE_SMALL)
+    desc_wrapped = _wrap_text(description, desc_font, w - 4)
+
+    # How many description lines can fit below label
+    label_height = total_height
+    remaining = h - 4 - label_height
+    max_desc_lines = max(0, remaining // FONT_SIZE_SMALL)
+    desc_wrapped = desc_wrapped[:max_desc_lines]
+
+    desc_height = len(desc_wrapped) * FONT_SIZE_SMALL
+    combined = label_height + desc_height
+    y_start = (h - combined) // 2
+
+    # Draw label
     for i, line in enumerate(wrapped):
         line_w = font.getlength(line)
         x = (w - line_w) // 2
         draw.text((x, y_start + i * line_height), line, font=font, fill=fg_color)
+
+    # Draw description
+    y_desc = y_start + label_height
+    for i, line in enumerate(desc_wrapped):
+        line_w = desc_font.getlength(line)
+        x = (w - line_w) // 2
+        draw.text((x, y_desc + i * FONT_SIZE_SMALL), line, font=desc_font, fill=desc_color)
 
     return img
 
@@ -419,7 +450,9 @@ def render_ask_question_page(
     control_buttons: dict[str, str],
     key_image_format: dict,
     page_info: str = "",
+    page_description: str = "",
     bg_color: str = ASK_EMPTY_BG,
+    descriptions: list[str] | None = None,
     grid_cols: int = GRID_COLS,
     grid_rows: int = GRID_ROWS,
 ) -> dict[int, bytes]:
@@ -430,9 +463,11 @@ def render_ask_question_page(
         selected: Set of currently selected option labels (highlighted).
         control_buttons: Key role → label mapping. Roles: "submit", "cancel", "back", "next".
         key_image_format: Stream Deck key format dict.
-        page_info: Optional page indicator text (e.g. "1/3") shown on the empty key
-            immediately left of Submit/Next. Not shown if no empty key is available there.
+        page_info: Optional header text (e.g. "Deploy" or "Deploy\\n1/3") shown on the
+            empty key immediately left of Submit/Next. Not shown if no empty key is available.
+        page_description: Optional question text shown below page_info as description.
         bg_color: Background color for empty keys (instance color).
+        descriptions: Optional list of description strings, parallel to options.
         grid_cols: Number of columns.
         grid_rows: Number of rows.
 
@@ -483,16 +518,13 @@ def render_ask_question_page(
             is_selected = label in selected
             bg = ASK_OPTION_SELECTED_BG if is_selected else ASK_OPTION_BG
             fg = ASK_OPTION_SELECTED_FG if is_selected else ASK_OPTION_FG
-            tile = _render_full_button(key_size, label, bg, fg)
+            desc = descriptions[idx] if descriptions and idx < len(descriptions) else ""
+            tile = _render_full_button(key_size, label, bg, fg, description=desc)
         elif key == page_info_key:
-            # Page indicator on the key just left of Submit/Next
-            tile = Image.new("RGB", key_size, bg_color)
-            draw = ImageDraw.Draw(tile)
-            font = load_font("regular", FONT_SIZE_SMALL)
-            tw = font.getlength(page_info)
-            draw.text(
-                ((key_w - tw) // 2, key_h // 2 - FONT_SIZE_SMALL // 2),
-                page_info, font=font, fill="#404040",
+            # Question header / page indicator on the key just left of Submit/Next
+            tile = _render_full_button(
+                key_size, page_info, bg_color, "#606060",
+                description=page_description, desc_color="#404040",
             )
         else:
             # Empty key with instance background
