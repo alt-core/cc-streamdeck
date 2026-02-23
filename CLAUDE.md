@@ -28,10 +28,10 @@ Claude Code へ結果返却
 - `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response）+ NDJSON encode/decode。`client_pid` でClaude インスタンス識別。`ask_answers` でAskUserQuestion回答を伝送
 - `src/cc_streamdeck/settings.py` — TOML設定ファイル読み込み（`~/.config/cc-streamdeck/config.toml`、XDG準拠）。tomllib使用
 - `src/cc_streamdeck/risk.py` — リスク評価エンジン。4段階（critical/high/medium/low）、Bashパターンマッチ、パス引き上げ、インスタンスパレット管理
-- `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、フォールバックメッセージ表示。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
+- `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、AskUserQuestion全面ボタン描画（ラベル+description）、フォールバックメッセージ表示。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
 - `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、`get_grid_layout()` でデバイスのグリッドサイズ取得、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
-- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→リスク評価→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル、フォールバック表示、設定読み込み
-- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。エラー時はexit 0でフォールバック
+- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→リスク評価→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル、AskUserQuestion対話UI（`_AskQuestionState`）、フォールバック表示、設定読み込み
+- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。エラー時はexit 0でフォールバック
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
 ### ボタンレイアウト
@@ -111,17 +111,19 @@ AskUserQuestion は Stream Deck 上で選択肢を直接表示し、ボタン押
 
 ```
 単一質問 (3選択肢, Mini):   複数質問 (2ページ目):     確認ページ:
-[Opt A ] [Opt B ] [Opt C ]  [Opt X ] [Opt Y ] [     ]  [     ] [     ] [     ]
+[Opt A ] [Opt B ] [Opt C ]  [Opt X ] [Opt Y ] [info ]  [     ] [     ] [     ]
 [Cancel] [     ] [Submit]   [Back  ] [     ] [Next ]   [Back ] [     ] [Submit]
 ```
 
-- 選択肢: 左上から順に1ボタン1選択肢、最大 `ボタン数 - 2` 個。選択済みは強調色
+- 選択肢ボタン: 左上から順に1ボタン1選択肢、最大 `ボタン数 - 2` 個。ラベル（太字）+ description（小文字グレー）を表示。選択済みは強調色
+- 情報ボタン: Submit/Next の1つ左の空きキーに質問の `header` と `question` テキストを表示。空きがなければ非表示
 - 操作ボタン: Submit=右下(緑), Cancel=左下(赤)。複数質問時は Back/Next でページ遷移
 - multiSelect: トグル式（各ボタン ON/OFF 切替、複数選択して Submit）
-- 複数質問: 1ページ目左下=Cancel、2ページ目以降左下=Back。最終質問後に確認ページ（Back + Submit）
+- 複数質問: 1ページ目左下=Cancel、2ページ目以降左下=Back。最終質問後に確認ページ（Back + Submit のみ）
+- 空きボタン押下は全ページで無視。背景色はインスタンス識別色
 - `_AskQuestionState`: ページ番号・回答・pending_action を管理
 - `_process_ask_question()`: イベントループで状態変更→再レンダリング→ボタン待ち
-- `render_ask_question_page()`: 全面ボタン表示（`_render_full_button()` で自動サイズテキスト）
+- `render_ask_question_page()`: 全面ボタン表示（`_render_full_button()` でラベル+description自動レイアウト）
 
 ### フォールバック表示
 

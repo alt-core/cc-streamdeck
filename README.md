@@ -107,6 +107,12 @@ cc-streamdeck-daemon --stop
 - **PPID ベースキャンセル**: ターミナルで応答後に次のリクエストが来ると、同じ Claude インスタンスからの古いリクエストを自動キャンセル
 - **自動終了**: Stream Deck が24時間接続されない場合、Daemon は自動終了
 
+### AskUserQuestion 対応
+
+Claude Code が AskUserQuestion ツールで選択肢を提示する際、Stream Deck のボタンに選択肢を直接表示し、ボタン押下で回答できる。選択肢のラベルと説明文がボタンに表示され、選択済みのボタンは色が変わる。複数の質問がある場合はページ送りで順に回答し、最後に確認ページで Submit する。
+
+> **注意**: AskUserQuestion が PermissionRequest hook を発火するのは Claude Code の現時点でのバグ ([#15400](https://github.com/anthropics/claude-code/issues/15400)) であり、将来のアップデートで振る舞いが変わる可能性がある。その場合、本機能は動作しなくなる。
+
 ### リスクレベル色
 
 ヘッダ（ツール名）の背景色と文字色で操作の危険度を表示:
