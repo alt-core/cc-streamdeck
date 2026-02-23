@@ -16,6 +16,8 @@ from .protocol import (
     encode,
 )
 from .renderer import compute_layout, render_permission_request
+from .risk import RiskConfig, assess_risk, instance_palette_index, load_risk_config
+from .settings import load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,15 @@ class Daemon:
         self._current_client_pid: int = 0
         self._server_socket: socket.socket | None = None
         self._running = False
+        # Risk and instance color state
+        self._settings = load_settings()
+        self._risk_config: RiskConfig = load_risk_config(self._settings)
+        self._seen_pids: list[int] = []
+        # Cached render colors for rerender
+        self._current_bg_color: str = "black"
+        self._current_header_bg: str = "#101010"
+        self._current_header_fg: str = "#808080"
+        self._current_body_fg: str = "white"
 
     def start(self) -> None:
         """Main entry point for the daemon."""
@@ -195,7 +206,34 @@ class Daemon:
         self._response_event.clear()
         self._response = None
 
-        images = render_permission_request(request, key_format)
+        # Compute risk and instance colors
+        risk_level = assess_risk(
+            request.tool_name, request.tool_input, self._risk_config
+        )
+        header_bg, header_fg = self._risk_config.risk_colors[risk_level]
+
+        palette_idx = instance_palette_index(
+            request.client_pid, self._seen_pids
+        )
+        palette = self._risk_config.instance_palette
+        bg_color = palette[palette_idx % len(palette)]
+        body_fg = self._risk_config.body_text_color
+
+        # Cache for rerender
+        self._current_bg_color = bg_color
+        self._current_header_bg = header_bg
+        self._current_header_fg = header_fg
+        self._current_body_fg = body_fg
+
+        logger.info("Risk: %s for %s (pid=%d, instance=%d)", risk_level, request.tool_name, request.client_pid, palette_idx)
+
+        images = render_permission_request(
+            request, key_format,
+            bg_color=bg_color,
+            header_bg_color=header_bg,
+            header_fg_color=header_fg,
+            body_fg_color=body_fg,
+        )
         self.device_state.set_key_images(images)
 
         # Poll with 1-second intervals, checking for cancel and client disconnect
@@ -286,7 +324,11 @@ class Daemon:
         if key_format is None:
             return
         images = render_permission_request(
-            self._current_request, key_format, always_active=self._always_active
+            self._current_request, key_format, always_active=self._always_active,
+            bg_color=self._current_bg_color,
+            header_bg_color=self._current_header_bg,
+            header_fg_color=self._current_header_fg,
+            body_fg_color=self._current_body_fg,
         )
         self.device_state.set_key_images(images)
 

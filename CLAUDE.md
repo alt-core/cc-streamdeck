@@ -26,9 +26,11 @@ Claude Code へ結果返却
 
 - `src/cc_streamdeck/config.py` — 共有定数（ソケットパス、タイムアウト、キーサイズ等）
 - `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response）+ NDJSON encode/decode。`client_pid` でClaude インスタンス識別
-- `src/cc_streamdeck/renderer.py` — PIL画像生成。6ボタンレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画
+- `src/cc_streamdeck/settings.py` — TOML設定ファイル読み込み（`~/.config/cc-streamdeck/config.toml`、XDG準拠）。tomllib使用
+- `src/cc_streamdeck/risk.py` — リスク評価エンジン。4段階（critical/high/medium/low）、Bashパターンマッチ、パス引き上げ、インスタンスパレット管理
+- `src/cc_streamdeck/renderer.py` — PIL画像生成。6ボタンレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
 - `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
-- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル
+- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→リスク評価→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル、設定読み込み
 - `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。エラー時はexit 0でフォールバック
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
@@ -54,6 +56,28 @@ Claude Code へ結果返却
 4. 10pxでも溢れる場合は末尾を `...` で省略
 
 ヘッダ行（ツール名）は本文10pxフォールバック時のみ20pxを維持。本文16pxのときはヘッダも16px。
+
+### リスク色（ヘッダ背景+文字色）
+
+ツール名ヘッダの背景色と文字色でリスクレベルを4段階で表現:
+
+| Level | 背景色 | 文字色 | 対象 |
+|-------|--------|--------|------|
+| critical | `#800000` | `#FFFFFF` | `rm -rf`, `sudo`, `git push --force`, `curl\|bash` |
+| high | `#604000` | `#FFD080` | `rm`, `git push`, `curl`, `pip install`, `mv`, `chmod` |
+| medium | `#203050` | `#80C0FF` | Write, Edit, WebFetch, 未知コマンド, MCP tools |
+| low | `#101010` | `#808080` | `ls`, `cat`, `git status`, `npm test` |
+
+Bash: 正規表現パターンマッチ（critical→low→high→medium の優先順）。Write/Edit: file_pathパターンで引き上げ可能。
+
+### インスタンス識別色（ボディ背景）
+
+ボディ背景色でClaudeインスタンスを区別。固定パレットから出現順で割当、常に表示:
+1. `#0A0A20` 暗い紺 2. `#0A200A` 暗い緑 3. `#200A0A` 暗い赤茶 4. `#1A1A0A` 暗い黄土 5. `#150A20` 暗い紫
+
+### 設定ファイル
+
+`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターンをカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
 
 ### Hook連携: PermissionRequest
 
@@ -142,3 +166,5 @@ uv run cc-streamdeck-daemon --stop   # Daemon停止
 - Hook Client は高速起動・応答が必須（Claude Code がブロックされるため）
 - あらゆるエラーで exit 0（出力なし）→ 端末フォールバック（ユーザーがスタックしない）
 - PPIDベースキャンセルでターミナル応答後の古いリクエストを自動クリア
+- リスク評価: low は確実にread-onlyな操作のみ。誤判定の余地があるものはmedium以上。未知コマンドはmedium
+- 設定ファイルのユーザーパターンはbuilt-inに加算（上書きではない、安全性のため）

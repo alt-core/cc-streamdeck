@@ -145,6 +145,31 @@ class TestRenderTextOnCanvas:
         extrema = img.getextrema()
         assert any(ch[1] > 0 for ch in extrema)
 
+    def test_custom_bg_color(self):
+        vw = GRID_COLS * KEY_PIXEL_SIZE[0]
+        vh = GRID_ROWS * KEY_PIXEL_SIZE[1]
+        # Render with a non-black body background
+        img = _render_text_on_canvas(
+            vw, vh, vh, "Bash", "ls", FONT_SIZE_LARGE,
+            bg_color="#0A0A20",
+        )
+        # Check that the image has blue channel values from the bg
+        # The bottom area (below header and text) should have bg color
+        pixel = img.getpixel((vw // 2, vh - 1))
+        assert pixel[2] >= 0x20  # blue channel from #0A0A20
+
+    def test_header_bg_color(self):
+        vw = GRID_COLS * KEY_PIXEL_SIZE[0]
+        vh = GRID_ROWS * KEY_PIXEL_SIZE[1]
+        img = _render_text_on_canvas(
+            vw, vh, vh, "Bash", "ls", FONT_SIZE_LARGE,
+            header_bg_color="#800000",
+        )
+        # Top-left area should have red from header background
+        # Check a pixel in the header region that's not covered by text
+        pixel = img.getpixel((vw - 1, 0))
+        assert pixel[0] >= 0x80  # red channel from #800000
+
 
 class TestChoiceAppearance:
     def test_allow_normal(self):

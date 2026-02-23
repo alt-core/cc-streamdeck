@@ -120,9 +120,13 @@ def _render_text_on_canvas(
     tool_name: str,
     content: str,
     font_size: int,
+    bg_color: str = "black",
+    header_bg_color: str = "#101010",
+    header_fg_color: str = "#808080",
+    body_fg_color: str = "white",
 ) -> Image.Image:
     """Render header + content text on a virtual canvas."""
-    virtual = Image.new("RGB", (vw, vh), "black")
+    virtual = Image.new("RGB", (vw, vh), bg_color)
     draw = ImageDraw.Draw(virtual)
 
     header_size = FONT_SIZE_LARGE if font_size == FONT_SIZE_SMALL else font_size
@@ -134,8 +138,11 @@ def _render_text_on_canvas(
     # Shift header up by descent so text starts at pixel y=0
     y = -header_descent
 
+    # Header background strip
+    draw.rectangle([(0, 0), (vw, header_size - 1)], fill=header_bg_color)
+
     # Tool name header (20px when content is 10px, otherwise same as content)
-    draw.text((0, y), f" {tool_name}", font=header_font, fill="#00BFFF")
+    draw.text((0, y), f" {tool_name}", font=header_font, fill=header_fg_color)
     y += header_size
 
     # Content text
@@ -148,7 +155,7 @@ def _render_text_on_canvas(
         next_overflows = y + 2 * line_height > text_max_y
         if next_overflows and i < len(wrapped) - 1:
             line = line.rstrip() + "..."
-        draw.text((0, y), line, font=font_regular, fill="white")
+        draw.text((0, y), line, font=font_regular, fill=body_fg_color)
         y += line_height
 
     return virtual
@@ -228,6 +235,10 @@ def render_permission_request(
     request: PermissionRequest,
     key_image_format: dict,
     always_active: bool = False,
+    bg_color: str = "black",
+    header_bg_color: str = "#101010",
+    header_fg_color: str = "#808080",
+    body_fg_color: str = "white",
 ) -> dict[int, bytes]:
     """Render all 6 button images for a permission request.
 
@@ -256,7 +267,13 @@ def render_permission_request(
     # Adaptive font size: 20 → 16 → 10 (truncate at 10 if still overflows)
     font_size = _choose_font_size(vw, text_max_y, tool_name, content)
 
-    virtual = _render_text_on_canvas(vw, vh, text_max_y, tool_name, content, font_size)
+    virtual = _render_text_on_canvas(
+        vw, vh, text_max_y, tool_name, content, font_size,
+        bg_color=bg_color,
+        header_bg_color=header_bg_color,
+        header_fg_color=header_fg_color,
+        body_fg_color=body_fg_color,
+    )
 
     # Split into per-key tiles and overlay choice labels
     result: dict[int, bytes] = {}
