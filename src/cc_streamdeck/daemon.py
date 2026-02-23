@@ -7,6 +7,7 @@ import signal
 import socket
 import sys
 import threading
+import time
 
 from .config import HOOK_TIMEOUT, LOG_PATH, SOCKET_PATH
 from .device import DeviceState
@@ -44,6 +45,7 @@ class Daemon:
         self._always_active = False
         self._cancel_event = threading.Event()
         self._current_client_pid: int = 0
+        self._latest_request_time: dict[int, float] = {}  # pid → monotonic timestamp
         self._server_socket: socket.socket | None = None
         self._running = False
         # Risk and instance color state
@@ -189,9 +191,26 @@ class Daemon:
                 )
                 self._cancel_event.set()
 
+            # Track the latest request per PID so stale queued requests
+            # can be detected after acquiring the lock.
+            request_time = time.monotonic()
+            if request.client_pid:
+                self._latest_request_time[request.client_pid] = request_time
+
             with self._request_lock:
-                self._cancel_event.clear()
-                response = self._process_request(request, conn)
+                # If a newer request from the same PID arrived while we were
+                # waiting for the lock, this request is stale — skip it.
+                if (
+                    request.client_pid
+                    and self._latest_request_time.get(request.client_pid, 0) > request_time
+                ):
+                    logger.info(
+                        "Skipping stale request for %s (pid=%d)", request.tool_name, request.client_pid
+                    )
+                    response = PermissionResponse(status="error", error_message="Stale request")
+                else:
+                    self._cancel_event.clear()
+                    response = self._process_request(request, conn)
 
             logger.info("Sending response: %s", response.status)
             conn.sendall(encode(response))
