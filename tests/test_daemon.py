@@ -165,6 +165,36 @@ class TestDaemonProcessRequest:
         assert "disconnected" in resp.error_message.lower()
         daemon.device_state.clear_keys.assert_called_once()
 
+    def test_cancel_by_same_client_pid(self, sample_request):
+        """New request from same PPID cancels the in-progress request."""
+        daemon = Daemon()
+        daemon.device_state = MagicMock()
+        daemon.device_state.status = "ready"
+        daemon.device_state.get_key_image_format.return_value = {
+            "size": (80, 80),
+            "format": "BMP",
+            "flip": (False, True),
+            "rotation": 90,
+        }
+
+        # Give the request a client_pid
+        sample_request.client_pid = 12345
+
+        # Simulate cancel after a short delay (as if a new request arrived)
+        def cancel_after_delay():
+            threading.Event().wait(0.3)
+            daemon._cancel_event.set()
+
+        t = threading.Thread(target=cancel_after_delay)
+        t.start()
+
+        resp = daemon._process_request(sample_request)
+        t.join()
+
+        assert resp.status == "error"
+        assert "cancelled" in resp.error_message.lower()
+        daemon.device_state.clear_keys.assert_called_once()
+
     def test_button_press_still_works_with_conn(self, sample_request):
         """Button press resolves normally even when conn monitoring is active."""
         daemon = Daemon()

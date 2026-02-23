@@ -8,12 +8,13 @@ on any error (exit 0 with no output).
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
 import time
 
-from .config import CONNECT_RETRY_INTERVAL, DAEMON_STARTUP_TIMEOUT, SOCKET_PATH
+from .config import CONNECT_RETRY_INTERVAL, DAEMON_STARTUP_TIMEOUT, HOOK_TIMEOUT, SOCKET_PATH
 from .protocol import (
     PermissionChoice,
     PermissionRequest,
@@ -49,6 +50,7 @@ def build_request(hook_input: dict) -> PermissionRequest:
         tool_input=tool_input,
         choices=choices,
         raw_hook_input=hook_input,
+        client_pid=os.getppid(),
     )
 
 
@@ -74,7 +76,7 @@ def _try_connect() -> socket.socket | None:
     """Attempt a single connection to the daemon socket."""
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(600.0)
+        sock.settimeout(float(HOOK_TIMEOUT + 10))
         sock.connect(str(SOCKET_PATH))
         return sock
     except (ConnectionRefusedError, FileNotFoundError, OSError):
@@ -138,21 +140,41 @@ def _communicate(sock: socket.socket, request: PermissionRequest) -> PermissionR
     return decode_response(data)
 
 
+def _log(msg: str) -> None:
+    """Append debug message to the daemon log file."""
+    import datetime
+
+    from .config import LOG_PATH
+
+    try:
+        with open(LOG_PATH, "a") as f:
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+            f.write(f"{ts} [cc_streamdeck.hook] DEBUG: {msg}\n")
+    except Exception:
+        pass
+
+
 def main() -> None:
     try:
         raw_input = sys.stdin.read()
         hook_input = json.loads(raw_input)
+        _log(f"Received hook input for tool: {hook_input.get('tool_name', '?')}")
 
         request = build_request(hook_input)
 
         sock = connect_to_daemon()
         if sock is None:
+            _log("Failed to connect to daemon")
             sys.exit(0)
+
+        _log("Connected to daemon")
 
         try:
             response = _communicate(sock, request)
         finally:
             sock.close()
+
+        _log(f"Response: {response.status}")
 
         if response.status != "ok" or response.chosen is None:
             sys.exit(0)
@@ -161,5 +183,6 @@ def main() -> None:
         sys.stdout.write(json.dumps(output, ensure_ascii=False))
         sys.exit(0)
 
-    except Exception:
+    except Exception as e:
+        _log(f"Exception: {e}")
         sys.exit(0)

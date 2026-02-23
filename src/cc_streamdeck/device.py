@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Callable
 
-from .config import DEVICE_POLL_INTERVAL
+from .config import DEVICE_POLL_INTERVAL, NO_DEVICE_SHUTDOWN_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class DeviceState:
         self._key_callback: KeyCallback | None = None
         self._poll_thread: threading.Thread | None = None
         self._running = False
+        self._no_device_since: float = time.monotonic()
 
     @property
     def status(self) -> str:
@@ -109,10 +110,24 @@ class DeviceState:
                 return
             self._clear_all_keys(self._deck)
 
+    @property
+    def no_device_elapsed(self) -> float:
+        """Seconds since device was last connected. 0 if currently connected."""
+        if self._status == "ready":
+            return 0.0
+        return time.monotonic() - self._no_device_since
+
     def _poll_loop(self) -> None:
         while self._running:
             time.sleep(DEVICE_POLL_INTERVAL)
             if self._status == "no_device":
+                if self.no_device_elapsed > NO_DEVICE_SHUTDOWN_TIMEOUT:
+                    logger.info(
+                        "No device for %d seconds, requesting shutdown",
+                        int(self.no_device_elapsed),
+                    )
+                    self._running = False
+                    break
                 self._try_open()
             elif self._deck is not None:
                 try:
@@ -135,6 +150,7 @@ class DeviceState:
                 with self._lock:
                     self._deck = d
                     self._status = "ready"
+                    self._no_device_since = 0.0  # clear timer
                 logger.info("Stream Deck opened: %s (%s)", d.deck_type(), d.get_serial_number())
                 return
         except Exception as e:
@@ -162,3 +178,4 @@ class DeviceState:
                     pass
                 self._deck = None
             self._status = "no_device"
+            self._no_device_since = time.monotonic()

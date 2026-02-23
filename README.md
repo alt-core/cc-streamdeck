@@ -39,24 +39,28 @@ Claude Code → PermissionRequest Hook → Hook Client → Unix Socket → Daemo
 ## インストール
 
 ```bash
-# uv (推奨)
-uv tool install cc-streamdeck
-
 # pip
-pip install cc-streamdeck
-```
+pip install git+https://github.com/alt-core/cc-streamdeck.git
 
-### 開発用インストール
+# uv
+uv pip install git+https://github.com/alt-core/cc-streamdeck.git
 
-```bash
-git clone https://github.com/yourname/cc-streamdeck.git
+# ソースから
+git clone https://github.com/alt-core/cc-streamdeck.git
 cd cc-streamdeck
 uv sync
 ```
 
 ## Claude Code Hook 設定
 
-`~/.claude/settings.json` に以下を追加:
+`~/.claude/settings.json` に以下を追加。`command` にはインストール先の絶対パスを指定:
+
+```bash
+# パスの確認
+which cc-streamdeck-hook          # pip install の場合
+# または
+echo $(pwd)/.venv/bin/cc-streamdeck-hook  # uv sync の場合
+```
 
 ```json
 {
@@ -66,8 +70,8 @@ uv sync
         "hooks": [
           {
             "type": "command",
-            "command": "cc-streamdeck-hook",
-            "timeout": 600
+            "command": "/path/to/cc-streamdeck-hook",
+            "timeout": 86400
           }
         ]
       }

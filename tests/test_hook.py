@@ -17,6 +17,7 @@ class TestBuildRequest:
         assert len(req.choices) == 2
         assert req.choices[0].label == "Allow"
         assert req.choices[1].label == "Deny"
+        assert req.client_pid > 0
 
     def test_with_suggestions(self):
         hook_input = {

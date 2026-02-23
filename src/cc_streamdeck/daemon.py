@@ -8,7 +8,7 @@ import socket
 import sys
 import threading
 
-from .config import LOG_PATH, SOCKET_PATH
+from .config import HOOK_TIMEOUT, LOG_PATH, SOCKET_PATH
 from .device import DeviceState
 from .protocol import (
     PermissionResponse,
@@ -28,6 +28,8 @@ class Daemon:
         self._response: PermissionResponse | None = None
         self._request_lock = threading.Lock()
         self._always_active = False
+        self._cancel_event = threading.Event()
+        self._current_client_pid: int = 0
         self._server_socket: socket.socket | None = None
         self._running = False
 
@@ -102,6 +104,11 @@ class Daemon:
                     t = threading.Thread(target=self._handle_connection, args=(conn,), daemon=True)
                     t.start()
                 except socket.timeout:
+                    # Check if device poll thread requested shutdown
+                    if not self.device_state._running:
+                        logger.info("Device poll thread requested shutdown")
+                        self.shutdown()
+                        break
                     continue
                 except OSError:
                     break
@@ -111,7 +118,7 @@ class Daemon:
     def _handle_connection(self, conn: socket.socket) -> None:
         """Handle a single Hook Client connection."""
         try:
-            conn.settimeout(600.0)
+            conn.settimeout(float(HOOK_TIMEOUT + 10))
             data = b""
             while True:
                 chunk = conn.recv(4096)
@@ -120,6 +127,8 @@ class Daemon:
                 data += chunk
                 if b"\n" in data:
                     break
+
+            logger.info("Received %d bytes from hook", len(data))
 
             if not data:
                 return
@@ -130,6 +139,7 @@ class Daemon:
             try:
                 msg = json.loads(data.decode("utf-8").strip())
             except (json.JSONDecodeError, UnicodeDecodeError):
+                logger.info("JSON parse failed, ignoring")
                 return
             if msg.get("type") == "stop":
                 logger.info("Received stop command via socket")
@@ -137,10 +147,22 @@ class Daemon:
                 return
 
             request = decode_request(data)
+            logger.info("Processing request for tool: %s (pid=%d)", request.tool_name, request.client_pid)
+
+            # Cancel in-progress request from the same Claude instance
+            if (
+                request.client_pid
+                and request.client_pid == self._current_client_pid
+                and self._current_request is not None
+            ):
+                logger.info("Cancelling previous request from same client (pid=%d)", request.client_pid)
+                self._cancel_event.set()
 
             with self._request_lock:
+                self._cancel_event.clear()
                 response = self._process_request(request, conn)
 
+            logger.info("Sending response: %s", response.status)
             conn.sendall(encode(response))
         except Exception as e:
             logger.error("Connection error: %s", e)
@@ -169,19 +191,25 @@ class Daemon:
 
         self._always_active = False
         self._current_request = request
+        self._current_client_pid = request.client_pid
         self._response_event.clear()
         self._response = None
 
         images = render_permission_request(request, key_format)
         self.device_state.set_key_images(images)
 
-        # Poll with 1-second intervals, probing client connection each time
+        # Poll with 1-second intervals, checking for cancel and client disconnect
         elapsed = 0.0
+        cancelled = False
         client_alive = True
-        while elapsed < 590.0:
+        while elapsed < HOOK_TIMEOUT:
             if self._response_event.wait(timeout=1.0):
                 break
             elapsed += 1.0
+            if self._cancel_event.is_set():
+                logger.info("Request cancelled by newer request from same client")
+                cancelled = True
+                break
             # Probe hook client connection
             if conn is not None and client_alive:
                 try:
@@ -191,11 +219,12 @@ class Daemon:
                     client_alive = False
                     break
 
-        if not client_alive:
+        if cancelled or not client_alive:
             self.device_state.clear_keys()
             self._current_request = None
+            self._current_client_pid = 0
             return PermissionResponse(
-                status="error", error_message="Client disconnected"
+                status="error", error_message="Cancelled" if cancelled else "Client disconnected"
             )
 
         if self._response_event.is_set():
@@ -207,6 +236,7 @@ class Daemon:
 
         self.device_state.clear_keys()
         self._current_request = None
+        self._current_client_pid = 0
 
         return response
 

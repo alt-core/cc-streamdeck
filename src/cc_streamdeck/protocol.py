@@ -25,6 +25,7 @@ class PermissionRequest:
     tool_input: dict = field(default_factory=dict)
     choices: list[PermissionChoice] = field(default_factory=list)
     raw_hook_input: dict = field(default_factory=dict)
+    client_pid: int = 0
     type: Literal["permission_request"] = "permission_request"
 
 
@@ -52,6 +53,7 @@ def decode_request(data: bytes) -> PermissionRequest:
         tool_input=obj.get("tool_input", {}),
         choices=choices,
         raw_hook_input=obj.get("raw_hook_input", {}),
+        client_pid=obj.get("client_pid", 0),
         type=obj.get("type", "permission_request"),
     )
 
