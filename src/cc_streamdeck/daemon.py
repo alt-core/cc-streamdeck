@@ -21,7 +21,14 @@ from .renderer import (
     render_fallback_message,
     render_permission_request,
 )
-from .risk import RiskConfig, assess_risk, instance_palette_index, load_risk_config
+from .risk import (
+    BUILTIN_BASH_RULES,
+    RiskConfig,
+    assess_risk,
+    assess_risk_verbose,
+    instance_palette_index,
+    load_risk_config,
+)
 from .settings import load_settings
 
 logger = logging.getLogger(__name__)
@@ -167,7 +174,9 @@ class Daemon:
                 return
 
             request = decode_request(data)
-            logger.info("Processing request for tool: %s (pid=%d)", request.tool_name, request.client_pid)
+            logger.info(
+                "Processing request for tool: %s (pid=%d)", request.tool_name, request.client_pid
+            )
 
             # Cancel in-progress request from the same Claude instance
             if (
@@ -175,7 +184,9 @@ class Daemon:
                 and request.client_pid == self._current_client_pid
                 and self._current_request is not None
             ):
-                logger.info("Cancelling previous request from same client (pid=%d)", request.client_pid)
+                logger.info(
+                    "Cancelling previous request from same client (pid=%d)", request.client_pid
+                )
                 self._cancel_event.set()
 
             with self._request_lock:
@@ -194,9 +205,7 @@ class Daemon:
         finally:
             conn.close()
 
-    def _process_request(
-        self, request, conn: socket.socket | None = None
-    ) -> PermissionResponse:
+    def _process_request(self, request, conn: socket.socket | None = None) -> PermissionResponse:
         """Display request on Stream Deck and wait for button press.
 
         Monitors the hook client connection: if the client is killed
@@ -215,6 +224,7 @@ class Daemon:
             grid_rows, grid_cols, _ = grid_info
         else:
             from .config import GRID_COLS, GRID_ROWS
+
             grid_cols, grid_rows = GRID_COLS, GRID_ROWS
 
         # Tools that cannot be handled via hook — show fallback message
@@ -234,14 +244,10 @@ class Daemon:
         self._response = None
 
         # Compute risk and instance colors
-        risk_level = assess_risk(
-            request.tool_name, request.tool_input, self._risk_config
-        )
+        risk_level = assess_risk(request.tool_name, request.tool_input, self._risk_config)
         header_bg, header_fg = self._risk_config.risk_colors[risk_level]
 
-        palette_idx = instance_palette_index(
-            request.client_pid, self._seen_pids
-        )
+        palette_idx = instance_palette_index(request.client_pid, self._seen_pids)
         palette = self._risk_config.instance_palette
         bg_color = palette[palette_idx % len(palette)]
         body_fg = self._risk_config.body_text_color
@@ -252,10 +258,17 @@ class Daemon:
         self._current_header_fg = header_fg
         self._current_body_fg = body_fg
 
-        logger.info("Risk: %s for %s (pid=%d, instance=%d)", risk_level, request.tool_name, request.client_pid, palette_idx)
+        logger.info(
+            "Risk: %s for %s (pid=%d, instance=%d)",
+            risk_level,
+            request.tool_name,
+            request.client_pid,
+            palette_idx,
+        )
 
         images = render_permission_request(
-            request, key_format,
+            request,
+            key_format,
             bg_color=bg_color,
             header_bg_color=header_bg,
             header_fg_color=header_fg,
@@ -408,7 +421,9 @@ class Daemon:
         if key_format is None:
             return
         images = render_permission_request(
-            self._current_request, key_format, always_active=self._always_active,
+            self._current_request,
+            key_format,
+            always_active=self._always_active,
             bg_color=self._current_bg_color,
             header_bg_color=self._current_header_bg,
             header_fg_color=self._current_header_fg,
@@ -694,15 +709,114 @@ def _send_stop() -> bool:
         return False
 
 
+def _cmd_check_config() -> None:
+    """Validate and display config summary."""
+    from .settings import get_config_path, load_settings
+
+    path = get_config_path()
+    print(f"Config: {path}")
+    if not path.exists():
+        print("  (file not found, using defaults)")
+
+    settings = load_settings()
+    config = load_risk_config(settings)
+
+    # Count built-in rules by level
+    builtin_counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for _, _, level in BUILTIN_BASH_RULES:
+        builtin_counts[level] += 1
+
+    # Count effective rules
+    effective_counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for rule in config.bash_rules:
+        effective_counts[rule.level] += 1
+
+    print(
+        f"  Built-in rules: {sum(builtin_counts.values())}"
+        f" ({builtin_counts['critical']} critical,"
+        f" {builtin_counts['high']} high,"
+        f" {builtin_counts['low']} low)"
+    )
+    print(f"  Prepend rules: {len(settings.bash_prepend)}")
+    print(f"  Append rules: {len(settings.bash_append)}")
+    print(f"  Level overrides: {len(settings.bash_levels)}")
+    if settings.bash_levels:
+        for name, level in settings.bash_levels.items():
+            print(f"    {name} -> {level}")
+    print(
+        f"  Effective rules: {sum(effective_counts.values())}"
+        f" ({effective_counts['critical']} critical,"
+        f" {effective_counts['high']} high,"
+        f" {effective_counts['medium']} medium,"
+        f" {effective_counts['low']} low)"
+    )
+    print(f"  Path elevation: {len(config.path_critical)} critical, {len(config.path_high)} high")
+
+    # Tool risk
+    print("  Tool risk:")
+    for tool, level in sorted(config.tool_risk.items()):
+        print(f"    {tool} = {level}")
+    print(f"    (default) = {config.tool_risk_fallback}")
+
+
+def _cmd_assess(args: list[str]) -> None:
+    """Dry-run risk assessment."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="cc-streamdeck-daemon --assess")
+    parser.add_argument("tool", help="Tool name (e.g. Bash, Write, Edit)")
+    parser.add_argument("command", nargs="?", default="", help="Command string (for Bash)")
+    parser.add_argument("--file-path", default="", help="File path (for Write/Edit)")
+    parsed = parser.parse_args(args)
+
+    settings = load_settings()
+    config = load_risk_config(settings)
+
+    tool_input: dict = {}
+    if parsed.command:
+        tool_input["command"] = parsed.command
+    if parsed.file_path:
+        tool_input["file_path"] = parsed.file_path
+
+    level, matched = assess_risk_verbose(parsed.tool, tool_input, config)
+
+    print(f"Tool: {parsed.tool}")
+    if parsed.command:
+        print(f"Command: {parsed.command}")
+    if parsed.file_path:
+        print(f"File path: {parsed.file_path}")
+    print(f"Risk: {level}")
+    if matched:
+        print(f"  Matched: {matched}")
+    else:
+        print("  Matched: (none, using default)")
+
+
 def main() -> None:
     import sys
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--stop":
+    args = sys.argv[1:]
+
+    if not args:
+        daemon = Daemon()
+        daemon.start()
+        return
+
+    cmd = args[0]
+
+    if cmd == "--stop":
         if _send_stop():
             print("Stop signal sent to daemon.")
         else:
             print("No running daemon found.")
-        return
-
-    daemon = Daemon()
-    daemon.start()
+    elif cmd == "--check-config":
+        _cmd_check_config()
+    elif cmd == "--assess":
+        _cmd_assess(args[1:])
+    else:
+        print(f"Unknown option: {cmd}", file=sys.stderr)
+        print(
+            "Usage: cc-streamdeck-daemon [--stop | --check-config | --assess TOOL [COMMAND] [--file-path PATH]]",
+            file=sys.stderr,
+        )
+        sys.exit(1)

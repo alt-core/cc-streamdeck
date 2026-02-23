@@ -73,17 +73,6 @@ class TestParse:
         assert settings.tool_risk["Write"] == "critical"
         assert settings.tool_risk_default == "high"
 
-    def test_bash_patterns(self):
-        data = {
-            "risk": {
-                "bash_critical": {"patterns": [r"\bmy-danger\b"]},
-                "bash_low": {"patterns": [r"^\s*my-safe\b"]},
-            }
-        }
-        settings = _parse(data)
-        assert settings.bash_critical_extra == [r"\bmy-danger\b"]
-        assert settings.bash_low_extra == [r"^\s*my-safe\b"]
-
     def test_path_patterns(self):
         data = {
             "risk": {
@@ -94,3 +83,69 @@ class TestParse:
         settings = _parse(data)
         assert settings.path_critical == [r"\.env$"]
         assert settings.path_high == [r"/etc/"]
+
+
+class TestParseBashRules:
+    """Test parsing of named bash rule settings."""
+
+    def test_bash_levels(self):
+        data = {"risk": {"bash": {"levels": {"curl": "low", "wget": "medium"}}}}
+        settings = _parse(data)
+        assert settings.bash_levels == {"curl": "low", "wget": "medium"}
+
+    def test_bash_prepend(self):
+        data = {
+            "risk": {
+                "bash": {
+                    "prepend": [
+                        {"name": "my-rule", "pattern": "my-cmd", "level": "low"},
+                        {"name": "other", "pattern": "other-cmd"},  # no level -> defaults
+                    ]
+                }
+            }
+        }
+        settings = _parse(data)
+        assert len(settings.bash_prepend) == 2
+        assert settings.bash_prepend[0]["name"] == "my-rule"
+        assert settings.bash_prepend[0]["pattern"] == "my-cmd"
+        assert settings.bash_prepend[0]["level"] == "low"
+        assert settings.bash_prepend[1]["name"] == "other"
+        assert "level" not in settings.bash_prepend[1]
+
+    def test_bash_append(self):
+        data = {
+            "risk": {
+                "bash": {
+                    "append": [
+                        {"name": "custom", "pattern": "custom-tool", "level": "high"},
+                    ]
+                }
+            }
+        }
+        settings = _parse(data)
+        assert len(settings.bash_append) == 1
+        assert settings.bash_append[0]["name"] == "custom"
+
+    def test_bash_prepend_skips_invalid(self):
+        data = {
+            "risk": {
+                "bash": {
+                    "prepend": [
+                        {"name": "no-pattern"},  # missing pattern
+                        {"pattern": "no-name", "level": "low"},  # missing name
+                        "not-a-dict",  # not a dict
+                        {"name": "valid", "pattern": "cmd", "level": "low"},
+                    ]
+                }
+            }
+        }
+        settings = _parse(data)
+        assert len(settings.bash_prepend) == 1
+        assert settings.bash_prepend[0]["name"] == "valid"
+
+    def test_empty_bash_section(self):
+        data = {"risk": {"bash": {}}}
+        settings = _parse(data)
+        assert settings.bash_levels == {}
+        assert settings.bash_prepend == []
+        assert settings.bash_append == []

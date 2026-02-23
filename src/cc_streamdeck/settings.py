@@ -28,10 +28,10 @@ class UserSettings:
     # Tool risk level overrides
     tool_risk: dict[str, str] = field(default_factory=dict)
     tool_risk_default: str = ""
-    # Extra Bash patterns (added to built-in)
-    bash_critical_extra: list[str] = field(default_factory=list)
-    bash_high_extra: list[str] = field(default_factory=list)
-    bash_low_extra: list[str] = field(default_factory=list)
+    # Named bash rule system
+    bash_prepend: list[dict[str, str]] = field(default_factory=list)
+    bash_append: list[dict[str, str]] = field(default_factory=list)
+    bash_levels: dict[str, str] = field(default_factory=dict)
     # Path patterns for Write/Edit risk elevation
     path_critical: list[str] = field(default_factory=list)
     path_high: list[str] = field(default_factory=list)
@@ -84,15 +84,34 @@ def _parse(data: dict) -> UserSettings:
         else:
             settings.tool_risk[k] = str(v)
 
-    # [risk.bash_*]
-    for level, attr in [
-        ("bash_critical", "bash_critical_extra"),
-        ("bash_high", "bash_high_extra"),
-        ("bash_low", "bash_low_extra"),
-    ]:
-        patterns = data.get("risk", {}).get(level, {}).get("patterns", [])
-        if isinstance(patterns, list):
-            setattr(settings, attr, [str(p) for p in patterns])
+    # [risk.bash.levels]
+    bash_levels = data.get("risk", {}).get("bash", {}).get("levels", {})
+    if isinstance(bash_levels, dict):
+        settings.bash_levels = {str(k): str(v) for k, v in bash_levels.items()}
+
+    # [[risk.bash.prepend]]
+    bash_prepend = data.get("risk", {}).get("bash", {}).get("prepend", [])
+    if isinstance(bash_prepend, list):
+        for entry in bash_prepend:
+            if isinstance(entry, dict):
+                rule = {}
+                for key in ("name", "pattern", "level"):
+                    if key in entry:
+                        rule[key] = str(entry[key])
+                if "name" in rule and "pattern" in rule:
+                    settings.bash_prepend.append(rule)
+
+    # [[risk.bash.append]]
+    bash_append = data.get("risk", {}).get("bash", {}).get("append", [])
+    if isinstance(bash_append, list):
+        for entry in bash_append:
+            if isinstance(entry, dict):
+                rule = {}
+                for key in ("name", "pattern", "level"):
+                    if key in entry:
+                        rule[key] = str(entry[key])
+                if "name" in rule and "pattern" in rule:
+                    settings.bash_append.append(rule)
 
     # [risk.path_*]
     for level, attr in [
