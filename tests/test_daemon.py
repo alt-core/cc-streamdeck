@@ -293,3 +293,165 @@ class TestDaemonFallback:
 
         assert resp.status == "fallback"
         daemon.device_state.clear_keys.assert_called_once()
+
+
+class TestDaemonAskQuestion:
+    """Tests for AskUserQuestion interactive UI."""
+
+    def _make_ready_daemon(self):
+        daemon = Daemon()
+        daemon.device_state = MagicMock()
+        daemon.device_state.status = "ready"
+        daemon.device_state.get_key_image_format.return_value = {
+            "size": (80, 80),
+            "format": "BMP",
+            "flip": (False, True),
+            "rotation": 90,
+        }
+        daemon.device_state.get_grid_layout.return_value = (2, 3, 6)
+        return daemon
+
+    def test_select_and_submit(self, ask_question_request):
+        """Select option A (key 0), then Submit (key 5)."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 0, True)  # Select Option A
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Submit
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_question_request)
+        t.join()
+
+        assert resp.status == "ok"
+        assert resp.ask_answers == {"Which approach?": "Option A"}
+
+    def test_cancel(self, ask_question_request):
+        """Cancel (key 3) returns error."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 3, True)  # Cancel
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_question_request)
+        t.join()
+
+        assert resp.status == "error"
+        assert "cancel" in resp.error_message.lower()
+
+    def test_change_selection(self, ask_question_request):
+        """Select A, then B, then Submit — should return B."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 0, True)  # Select A
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 1, True)  # Change to B
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Submit
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_question_request)
+        t.join()
+
+        assert resp.ask_answers == {"Which approach?": "Option B"}
+
+    def test_submit_without_selection_ignored(self, ask_question_request):
+        """Submit without selecting should be ignored."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 5, True)  # Submit (no selection)
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 0, True)  # Select A
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Submit
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_question_request)
+        t.join()
+
+        assert resp.status == "ok"
+        assert resp.ask_answers == {"Which approach?": "Option A"}
+
+    def test_multi_page_navigation(self, ask_multi_question_request):
+        """Navigate through multi-page questions."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 0, True)  # Select A1 on page 1
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Next
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 0, True)  # Select B1 on page 2
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Go to confirm
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Submit on confirm page
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_multi_question_request)
+        t.join()
+
+        assert resp.status == "ok"
+        assert resp.ask_answers == {
+            "First question?": "A1",
+            "Second question?": "B1",
+        }
+
+    def test_multi_page_back(self, ask_multi_question_request):
+        """Back button on page 2 returns to page 1."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 0, True)  # Select A1
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Next
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 3, True)  # Back (page 2, left-bottom = back)
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 1, True)  # Change to A2
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Next
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 0, True)  # Select B1
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Confirm
+            threading.Event().wait(0.2)
+            daemon._key_callback(None, 5, True)  # Submit
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_multi_question_request)
+        t.join()
+
+        assert resp.status == "ok"
+        assert resp.ask_answers["First question?"] == "A2"
+
+    def test_multi_page_cancel_on_first_page(self, ask_multi_question_request):
+        """Cancel on first page cancels the entire session."""
+        daemon = self._make_ready_daemon()
+
+        def interact():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 3, True)  # Cancel on page 1
+
+        t = threading.Thread(target=interact)
+        t.start()
+        resp = daemon._process_request(ask_multi_question_request)
+        t.join()
+
+        assert resp.status == "error"

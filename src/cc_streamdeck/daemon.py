@@ -15,7 +15,12 @@ from .protocol import (
     decode_request,
     encode,
 )
-from .renderer import compute_layout, render_fallback_message, render_permission_request
+from .renderer import (
+    compute_layout,
+    render_ask_question_page,
+    render_fallback_message,
+    render_permission_request,
+)
 from .risk import RiskConfig, assess_risk, instance_palette_index, load_risk_config
 from .settings import load_settings
 
@@ -45,6 +50,8 @@ class Daemon:
         self._current_body_fg: str = "white"
         self._current_grid_cols: int = 3
         self._current_grid_rows: int = 2
+        # AskUserQuestion state
+        self._ask_state: _AskQuestionState | None = None
 
     def start(self) -> None:
         """Main entry point for the daemon."""
@@ -211,8 +218,12 @@ class Daemon:
             grid_cols, grid_rows = GRID_COLS, GRID_ROWS
 
         # Tools that cannot be handled via hook — show fallback message
-        if request.tool_name in ("ExitPlanMode", "AskUserQuestion"):
+        if request.tool_name in ("ExitPlanMode",):
             return self._process_fallback(request, key_format, grid_cols, grid_rows, conn)
+
+        # AskUserQuestion — interactive question UI
+        if request.tool_name == "AskUserQuestion":
+            return self._process_ask_question(request, key_format, grid_cols, grid_rows, conn)
 
         self._always_active = False
         self._current_request = request
@@ -305,8 +316,13 @@ class Daemon:
             return
 
         # Fallback mode: any button dismisses the display
-        if self._current_request.tool_name in ("ExitPlanMode", "AskUserQuestion"):
+        if self._current_request.tool_name in ("ExitPlanMode",):
             self._response_event.set()
+            return
+
+        # AskUserQuestion mode: handle via _ask_state
+        if self._ask_state is not None:
+            self._handle_ask_key(key)
             return
 
         num_choices = len(self._current_request.choices)
@@ -401,6 +417,263 @@ class Daemon:
             grid_rows=self._current_grid_rows,
         )
         self.device_state.set_key_images(images)
+
+    # -- AskUserQuestion support --
+
+    def _process_ask_question(
+        self,
+        request,
+        key_format: dict,
+        grid_cols: int,
+        grid_rows: int,
+        conn: socket.socket | None = None,
+    ) -> PermissionResponse:
+        """Interactive question UI for AskUserQuestion."""
+        questions = request.tool_input.get("questions", [])
+        if not questions:
+            return self._process_fallback(request, key_format, grid_cols, grid_rows, conn)
+
+        logger.info("AskUserQuestion: %d questions", len(questions))
+
+        self._current_request = request
+        self._current_client_pid = request.client_pid
+        self._current_grid_cols = grid_cols
+        self._current_grid_rows = grid_rows
+
+        # Compute instance background color
+        palette_idx = instance_palette_index(request.client_pid, self._seen_pids)
+        palette = self._risk_config.instance_palette
+        self._current_bg_color = palette[palette_idx % len(palette)]
+
+        total_pages = len(questions)
+        self._ask_state = _AskQuestionState(
+            questions=questions,
+            total_pages=total_pages,
+            current_page=0,
+            answers={},
+            multi_answers={},
+            is_confirm_page=False,
+        )
+
+        self._render_ask_page(key_format, grid_cols, grid_rows)
+
+        # Wait loop: re-render on each state change, exit on submit/cancel/disconnect
+        elapsed = 0.0
+        while elapsed < HOOK_TIMEOUT:
+            self._response_event.clear()
+            if self._response_event.wait(timeout=1.0):
+                state = self._ask_state
+                if state is None:
+                    break
+                action = state.pending_action
+                state.pending_action = None
+
+                if action == "submit":
+                    # Build answers dict: question_text → label(s)
+                    ask_answers = {}
+                    for i, q in enumerate(questions):
+                        question_text = q.get("question", "")
+                        is_multi = q.get("multiSelect", False)
+                        if is_multi and i in state.multi_answers:
+                            ask_answers[question_text] = ", ".join(sorted(state.multi_answers[i]))
+                        elif i in state.answers:
+                            ask_answers[question_text] = state.answers[i]
+                    self.device_state.clear_keys()
+                    self._current_request = None
+                    self._current_client_pid = 0
+                    self._ask_state = None
+                    return PermissionResponse(status="ok", ask_answers=ask_answers)
+
+                if action == "cancel":
+                    self.device_state.clear_keys()
+                    self._current_request = None
+                    self._current_client_pid = 0
+                    self._ask_state = None
+                    return PermissionResponse(status="error", error_message="Cancelled by user")
+
+                # Navigation or selection — re-render
+                self._render_ask_page(key_format, grid_cols, grid_rows)
+                continue
+
+            elapsed += 1.0
+            if self._cancel_event.is_set():
+                break
+            if conn is not None:
+                try:
+                    conn.sendall(b"\n")
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    break
+
+        self.device_state.clear_keys()
+        self._current_request = None
+        self._current_client_pid = 0
+        self._ask_state = None
+        return PermissionResponse(status="error", error_message="Cancelled")
+
+    def _render_ask_page(self, key_format: dict, grid_cols: int, grid_rows: int) -> None:
+        """Render the current AskUserQuestion page."""
+        state = self._ask_state
+        if state is None:
+            return
+
+        total_keys = grid_cols * grid_rows
+        is_multi_page = state.total_pages > 1
+
+        if state.is_confirm_page:
+            # Confirmation page: Back + Cancel + Submit, no options
+            controls = {
+                "back": "Back",
+                "cancel": "Cancel",
+                "submit": "Submit",
+            }
+            page_info = "Confirm"
+            images = render_ask_question_page(
+                options=[], selected=set(), control_buttons=controls,
+                key_image_format=key_format, page_info=page_info,
+                bg_color=self._current_bg_color,
+                grid_cols=grid_cols, grid_rows=grid_rows,
+            )
+        else:
+            q = state.questions[state.current_page]
+            is_multi = q.get("multiSelect", False)
+            options_data = q.get("options", [])
+            max_options = total_keys - 2
+            options = [opt["label"] for opt in options_data[:max_options]]
+
+            # Get selected set for this page
+            if is_multi:
+                selected = state.multi_answers.get(state.current_page, set())
+            else:
+                ans = state.answers.get(state.current_page)
+                selected = {ans} if ans else set()
+
+            # Control buttons
+            if not is_multi_page:
+                controls = {"cancel": "Cancel", "submit": "Submit"}
+            elif state.current_page == 0:
+                controls = {"cancel": "Cancel", "next": "Next"}
+            else:
+                controls = {"back": "Back", "next": "Next"}
+
+            page_info = f"{state.current_page + 1}/{state.total_pages}" if is_multi_page else ""
+
+            images = render_ask_question_page(
+                options=options, selected=selected, control_buttons=controls,
+                key_image_format=key_format, page_info=page_info,
+                bg_color=self._current_bg_color,
+                grid_cols=grid_cols, grid_rows=grid_rows,
+            )
+
+        self.device_state.set_key_images(images)
+
+    def _handle_ask_key(self, key: int) -> None:
+        """Handle a button press during AskUserQuestion."""
+        state = self._ask_state
+        if state is None:
+            return
+
+        grid_cols = self._current_grid_cols
+        grid_rows = self._current_grid_rows
+        total_keys = grid_cols * grid_rows
+        submit_key = total_keys - 1
+        cancel_key = total_keys - grid_cols
+
+        if state.is_confirm_page:
+            # Confirm page: cancel_key=Back, cancel_key+1=Cancel, submit_key=Submit
+            if key == submit_key:
+                state.pending_action = "submit"
+                self._response_event.set()
+            elif key == cancel_key:
+                # Back to last question
+                state.is_confirm_page = False
+                state.pending_action = "navigate"
+                self._response_event.set()
+            elif key == cancel_key + 1:
+                state.pending_action = "cancel"
+                self._response_event.set()
+            return
+
+        q = state.questions[state.current_page]
+        is_multi = q.get("multiSelect", False)
+        options_data = q.get("options", [])
+        max_options = total_keys - 2
+
+        # Build option key list (same logic as renderer)
+        control_keys = {submit_key, cancel_key}
+        option_keys = []
+        for k in range(total_keys):
+            if k not in control_keys and len(option_keys) < min(len(options_data), max_options):
+                option_keys.append(k)
+
+        is_multi_page = state.total_pages > 1
+
+        if key == cancel_key:
+            if state.current_page == 0:
+                # Cancel on first page
+                state.pending_action = "cancel"
+                self._response_event.set()
+            else:
+                # Back
+                state.current_page -= 1
+                state.pending_action = "navigate"
+                self._response_event.set()
+        elif key == submit_key:
+            if not is_multi_page:
+                # Single question: Submit
+                if state.current_page in state.answers or state.current_page in state.multi_answers:
+                    state.pending_action = "submit"
+                    self._response_event.set()
+            else:
+                # Multi-page: Next or go to confirm
+                page_answered = state.current_page in state.answers or state.current_page in state.multi_answers
+                if page_answered:
+                    if state.current_page < state.total_pages - 1:
+                        state.current_page += 1
+                        state.pending_action = "navigate"
+                        self._response_event.set()
+                    else:
+                        state.is_confirm_page = True
+                        state.pending_action = "navigate"
+                        self._response_event.set()
+        elif key in option_keys:
+            idx = option_keys.index(key)
+            label = options_data[idx]["label"]
+            if is_multi:
+                multi = state.multi_answers.setdefault(state.current_page, set())
+                if label in multi:
+                    multi.discard(label)
+                else:
+                    multi.add(label)
+            else:
+                state.answers[state.current_page] = label
+            state.pending_action = "select"
+            self._response_event.set()
+
+
+class _AskQuestionState:
+    """Mutable state for an AskUserQuestion session."""
+
+    __slots__ = (
+        "questions", "total_pages", "current_page",
+        "answers", "multi_answers", "is_confirm_page", "pending_action",
+    )
+
+    def __init__(
+        self,
+        questions: list,
+        total_pages: int,
+        current_page: int,
+        answers: dict,
+        multi_answers: dict,
+        is_confirm_page: bool,
+    ):
+        self.questions = questions
+        self.total_pages = total_pages
+        self.current_page = current_page
+        self.answers: dict[int, str] = answers
+        self.multi_answers: dict[int, set[str]] = multi_answers
+        self.is_confirm_page = is_confirm_page
+        self.pending_action: str | None = None
 
 
 def _send_stop() -> bool:

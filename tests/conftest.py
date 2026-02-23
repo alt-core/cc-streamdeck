@@ -37,6 +37,60 @@ def exit_plan_mode_request():
 
 
 @pytest.fixture
+def ask_question_request():
+    return PermissionRequest(
+        tool_name="AskUserQuestion",
+        tool_input={
+            "questions": [
+                {
+                    "question": "Which approach?",
+                    "header": "Approach",
+                    "options": [
+                        {"label": "Option A", "description": "First approach"},
+                        {"label": "Option B", "description": "Second approach"},
+                        {"label": "Option C", "description": "Third approach"},
+                    ],
+                    "multiSelect": False,
+                }
+            ]
+        },
+        choices=[],
+        raw_hook_input={"hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion"},
+    )
+
+
+@pytest.fixture
+def ask_multi_question_request():
+    return PermissionRequest(
+        tool_name="AskUserQuestion",
+        tool_input={
+            "questions": [
+                {
+                    "question": "First question?",
+                    "header": "Q1",
+                    "options": [
+                        {"label": "A1", "description": ""},
+                        {"label": "A2", "description": ""},
+                    ],
+                    "multiSelect": False,
+                },
+                {
+                    "question": "Second question?",
+                    "header": "Q2",
+                    "options": [
+                        {"label": "B1", "description": ""},
+                        {"label": "B2", "description": ""},
+                    ],
+                    "multiSelect": False,
+                },
+            ]
+        },
+        choices=[],
+        raw_hook_input={"hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion"},
+    )
+
+
+@pytest.fixture
 def two_choice_request():
     return PermissionRequest(
         tool_name="Write",

@@ -25,7 +25,7 @@ Claude Code へ結果返却
 ### ソースコード構成
 
 - `src/cc_streamdeck/config.py` — 共有定数（ソケットパス、タイムアウト、キーサイズ等）
-- `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response）+ NDJSON encode/decode。`client_pid` でClaude インスタンス識別
+- `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response）+ NDJSON encode/decode。`client_pid` でClaude インスタンス識別。`ask_answers` でAskUserQuestion回答を伝送
 - `src/cc_streamdeck/settings.py` — TOML設定ファイル読み込み（`~/.config/cc-streamdeck/config.toml`、XDG準拠）。tomllib使用
 - `src/cc_streamdeck/risk.py` — リスク評価エンジン。4段階（critical/high/medium/low）、Bashパターンマッチ、パス引き上げ、インスタンスパレット管理
 - `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、フォールバックメッセージ表示。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
@@ -105,12 +105,30 @@ Claude Code の **PermissionRequest** hook を使用。権限確認ダイアロ�
 }
 ```
 
+### AskUserQuestion（インタラクティブUI）
+
+AskUserQuestion は Stream Deck 上で選択肢を直接表示し、ボタン押下で回答する（注: PermissionRequest 発火はバグ #15400、将来修正される可能性あり）。hook は `updatedInput.answers` で回答を返す。
+
+```
+単一質問 (3選択肢, Mini):   複数質問 (2ページ目):     確認ページ:
+[Opt A ] [Opt B ] [Opt C ]  [Opt X ] [Opt Y ] [     ]  [     ] [     ] [     ]
+[Cancel] [     ] [Submit]   [Back  ] [     ] [Next ]   [Back ] [     ] [Submit]
+```
+
+- 選択肢: 左上から順に1ボタン1選択肢、最大 `ボタン数 - 2` 個。選択済みは強調色
+- 操作ボタン: Submit=右下(緑), Cancel=左下(赤)。複数質問時は Back/Next でページ遷移
+- multiSelect: トグル式（各ボタン ON/OFF 切替、複数選択して Submit）
+- 複数質問: 1ページ目左下=Cancel、2ページ目以降左下=Back。最終質問後に確認ページ（Back + Submit）
+- `_AskQuestionState`: ページ番号・回答・pending_action を管理
+- `_process_ask_question()`: イベントループで状態変更→再レンダリング→ボタン待ち
+- `render_ask_question_page()`: 全面ボタン表示（`_render_full_button()` で自動サイズテキスト）
+
 ### フォールバック表示
 
-ExitPlanMode や AskUserQuestion など、hook の `allow`/`deny` では適切にハンドリングできないツールは、Stream Deck に「→ ターミナルで操作」メッセージを表示し、任意のボタン押下で dismiss。daemon は `status="fallback"` を返し、hook は exit 0（出力なし）でターミナルプロンプトにフォールバックする。
+ExitPlanMode など、hook の `allow`/`deny` では適切にハンドリングできないツールは、Stream Deck に「See Claude Code」メッセージと OK ボタンを表示し、任意のボタン押下で dismiss。daemon は `status="fallback"` を返し、hook は exit 0（出力なし）でターミナルプロンプトにフォールバックする。
 
 - `_process_fallback()`: フォールバックメッセージ表示 + ボタン待ち + クライアント切断監視
-- `render_fallback_message()`: 琥珀色ヘッダ + 誘導メッセージの画像生成
+- `render_fallback_message()`: ツール名ヘッダ + 「See Claude Code」+ OK ボタンの画像生成
 - `_key_callback()` でフォールバックツール判定時は全ボタンが dismiss トリガー
 
 ### PPIDベースキャンセル
@@ -178,5 +196,5 @@ uv run cc-streamdeck-daemon --stop   # Daemon停止
 - PPIDベースキャンセルでターミナル応答後の古いリクエストを自動クリア
 - リスク評価: low は確実にread-onlyな操作のみ。誤判定の余地があるものはmedium以上。未知コマンドはmedium
 - 設定ファイルのユーザーパターンはbuilt-inに加算（上書きではない、安全性のため）
-- hook の allow/deny で扱えないツール（ExitPlanMode, AskUserQuestion）はフォールバック表示でターミナルに誘導
+- AskUserQuestion は Stream Deck 上で直接回答（`updatedInput.answers` で返却）。ExitPlanMode はフォールバック表示でターミナルに誘導
 - レイアウトは `deck.key_layout()` から動的計算。Mini以外のモデルでもコード変更なしで動作する設計

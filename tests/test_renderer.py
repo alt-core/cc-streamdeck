@@ -344,6 +344,150 @@ class TestRenderFallbackMessage:
         assert set(result.keys()) == set(range(15))
 
 
+class TestRenderAskQuestionPage:
+    MOCK_FORMAT = {
+        "size": (80, 80),
+        "format": "BMP",
+        "flip": (False, True),
+        "rotation": 90,
+    }
+
+    def test_returns_all_keys(self):
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        result = render_ask_question_page(
+            options=["A", "B", "C"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "submit": "Submit"},
+            key_image_format=self.MOCK_FORMAT,
+        )
+        assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
+
+    def test_returns_bytes(self):
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        result = render_ask_question_page(
+            options=["A", "B"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "submit": "Submit"},
+            key_image_format=self.MOCK_FORMAT,
+        )
+        for v in result.values():
+            assert isinstance(v, bytes)
+            assert len(v) > 0
+
+    def test_four_options(self):
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        result = render_ask_question_page(
+            options=["A", "B", "C", "D"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "submit": "Submit"},
+            key_image_format=self.MOCK_FORMAT,
+        )
+        assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
+
+    def test_with_navigation(self):
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        result = render_ask_question_page(
+            options=["A", "B"],
+            selected={"A"},
+            control_buttons={"back": "Back", "next": "Next"},
+            key_image_format=self.MOCK_FORMAT,
+            page_info="2/3",
+        )
+        assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
+
+    def test_confirm_page_no_options(self):
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        result = render_ask_question_page(
+            options=[],
+            selected=set(),
+            control_buttons={"back": "Back", "cancel": "Cancel", "submit": "Submit"},
+            key_image_format=self.MOCK_FORMAT,
+            page_info="Confirm",
+        )
+        assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
+
+    def test_custom_grid(self):
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        result = render_ask_question_page(
+            options=["A", "B", "C", "D", "E"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "submit": "Submit"},
+            key_image_format=self.MOCK_FORMAT,
+            grid_cols=5, grid_rows=3,
+        )
+        assert set(result.keys()) == set(range(15))
+
+    def test_bg_color_applied(self):
+        """Empty keys use the provided bg_color (instance color)."""
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        # 2 options + 2 controls = 2 empty keys (keys 2, 4 on 3x2 grid)
+        result = render_ask_question_page(
+            options=["A", "B"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "submit": "Submit"},
+            key_image_format=self.MOCK_FORMAT,
+            bg_color="#0A200A",
+        )
+        assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
+        # All keys should render as bytes
+        for v in result.values():
+            assert isinstance(v, bytes)
+
+    def test_page_info_only_on_submit_adjacent(self):
+        """page_info appears only on key submit_key-1, not on all empty keys."""
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        # 2 options on 3x2: keys 0,1=options, 2=empty, 3=cancel, 4=empty(page_info), 5=submit
+        result_with = render_ask_question_page(
+            options=["A", "B"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "next": "Next"},
+            key_image_format=self.MOCK_FORMAT,
+            page_info="1/2",
+        )
+        result_without = render_ask_question_page(
+            options=["A", "B"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "next": "Next"},
+            key_image_format=self.MOCK_FORMAT,
+            page_info="",
+        )
+        # Key 4 (submit-1) should differ (has page info text)
+        assert result_with[4] != result_without[4]
+        # Key 2 (other empty key) should be same (no page info)
+        assert result_with[2] == result_without[2]
+
+    def test_page_info_not_shown_when_no_space(self):
+        """page_info is not shown when 4 options fill all non-control slots."""
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        # 4 options on 3x2: keys 0,1,2,4=options, 3=cancel, 5=submit — no empty key
+        result_with = render_ask_question_page(
+            options=["A", "B", "C", "D"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "next": "Next"},
+            key_image_format=self.MOCK_FORMAT,
+            page_info="1/2",
+        )
+        result_without = render_ask_question_page(
+            options=["A", "B", "C", "D"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "next": "Next"},
+            key_image_format=self.MOCK_FORMAT,
+            page_info="",
+        )
+        # All keys should be identical (no place to show page_info)
+        for key in range(6):
+            assert result_with[key] == result_without[key]
+
+
 class TestTruncation:
     def test_overflow_text_still_renders(self):
         """Even very long text should render without error."""

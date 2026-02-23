@@ -36,6 +36,7 @@ class PermissionResponse:
     status: Literal["ok", "no_device", "error", "fallback"] = "ok"
     chosen: PermissionChoice | None = None
     error_message: str = ""
+    ask_answers: dict = field(default_factory=dict)
     type: Literal["permission_response"] = "permission_response"
 
 
@@ -66,5 +67,6 @@ def decode_response(data: bytes) -> PermissionResponse:
         status=obj.get("status", "ok"),
         chosen=chosen,
         error_message=obj.get("error_message", ""),
+        ask_answers=obj.get("ask_answers", {}),
         type=obj.get("type", "permission_response"),
     )

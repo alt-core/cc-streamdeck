@@ -1,6 +1,6 @@
 """Tests for Hook Client logic."""
 
-from cc_streamdeck.hook import build_hook_output, build_request
+from cc_streamdeck.hook import build_ask_question_output, build_hook_output, build_request
 from cc_streamdeck.protocol import PermissionChoice
 
 
@@ -41,6 +41,27 @@ class TestBuildRequest:
         req = build_request(hook_input)
         assert req.raw_hook_input == hook_input
 
+    def test_ask_question_request(self):
+        hook_input = {
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "AskUserQuestion",
+            "tool_input": {
+                "questions": [
+                    {
+                        "question": "Which?",
+                        "header": "Q",
+                        "options": [{"label": "A", "description": ""}],
+                        "multiSelect": False,
+                    }
+                ]
+            },
+            "permission_suggestions": [],
+        }
+        req = build_request(hook_input)
+        assert req.tool_name == "AskUserQuestion"
+        assert req.choices == []  # No pre-built choices
+        assert req.tool_input["questions"][0]["question"] == "Which?"
+
 
 class TestBuildHookOutput:
     def test_allow_output(self):
@@ -67,3 +88,32 @@ class TestBuildHookOutput:
         decision = output["hookSpecificOutput"]["decision"]
         assert decision["behavior"] == "allow"
         assert decision["updatedPermissions"] == [{"type": "toolAlwaysAllow", "tool": "Bash"}]
+
+
+class TestBuildAskQuestionOutput:
+    def test_basic_output(self):
+        hook_input = {
+            "tool_input": {
+                "questions": [
+                    {"question": "Which?", "header": "Q", "options": [{"label": "A"}]}
+                ]
+            }
+        }
+        output = build_ask_question_output(hook_input, {"Which?": "A"})
+        decision = output["hookSpecificOutput"]["decision"]
+        assert decision["behavior"] == "allow"
+        assert decision["updatedInput"]["answers"] == {"Which?": "A"}
+        assert decision["updatedInput"]["questions"] == hook_input["tool_input"]["questions"]
+
+    def test_multi_question_output(self):
+        hook_input = {
+            "tool_input": {
+                "questions": [
+                    {"question": "Q1?", "options": [{"label": "A"}]},
+                    {"question": "Q2?", "options": [{"label": "B"}]},
+                ]
+            }
+        }
+        answers = {"Q1?": "A", "Q2?": "B"}
+        output = build_ask_question_output(hook_input, answers)
+        assert output["hookSpecificOutput"]["decision"]["updatedInput"]["answers"] == answers

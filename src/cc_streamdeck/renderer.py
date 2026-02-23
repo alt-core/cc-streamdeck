@@ -369,6 +369,139 @@ def render_fallback_message(
     return result
 
 
+# -- AskUserQuestion rendering --
+
+# Button colors for AskUserQuestion
+ASK_OPTION_BG = "#203050"
+ASK_OPTION_SELECTED_BG = "#2060C0"
+ASK_OPTION_FG = "#C0C0C0"
+ASK_OPTION_SELECTED_FG = "white"
+ASK_SUBMIT_BG = "#005000"
+ASK_CANCEL_BG = "#800000"
+ASK_NAV_BG = "#303030"
+ASK_CONTROL_FG = "white"
+ASK_EMPTY_BG = "#0A0A10"
+
+
+def _render_full_button(
+    size: tuple[int, int],
+    label: str,
+    bg_color: str,
+    fg_color: str = "white",
+) -> Image.Image:
+    """Render a full-button label with auto-sized text."""
+    w, h = size
+    img = Image.new("RGB", (w, h), bg_color)
+    draw = ImageDraw.Draw(img)
+
+    # Try font sizes: 16 → 10, pick largest that fits
+    for font_size in [FONT_SIZE_MEDIUM, FONT_SIZE_SMALL]:
+        font = load_font("bold", font_size)
+        wrapped = _wrap_text(label, font, w - 4)
+        line_height = font_size
+        total_height = len(wrapped) * line_height
+        if total_height <= h - 4:
+            break
+
+    # Center vertically
+    y_start = (h - total_height) // 2
+    for i, line in enumerate(wrapped):
+        line_w = font.getlength(line)
+        x = (w - line_w) // 2
+        draw.text((x, y_start + i * line_height), line, font=font, fill=fg_color)
+
+    return img
+
+
+def render_ask_question_page(
+    options: list[str],
+    selected: set[str],
+    control_buttons: dict[str, str],
+    key_image_format: dict,
+    page_info: str = "",
+    bg_color: str = ASK_EMPTY_BG,
+    grid_cols: int = GRID_COLS,
+    grid_rows: int = GRID_ROWS,
+) -> dict[int, bytes]:
+    """Render an AskUserQuestion page with option buttons and control buttons.
+
+    Args:
+        options: List of option labels to display (left-to-right, top-to-bottom).
+        selected: Set of currently selected option labels (highlighted).
+        control_buttons: Key role → label mapping. Roles: "submit", "cancel", "back", "next".
+        key_image_format: Stream Deck key format dict.
+        page_info: Optional page indicator text (e.g. "1/3") shown on the empty key
+            immediately left of Submit/Next. Not shown if no empty key is available there.
+        bg_color: Background color for empty keys (instance color).
+        grid_cols: Number of columns.
+        grid_rows: Number of rows.
+
+    Returns:
+        {key_index: native_format_bytes} for all keys.
+    """
+    total_keys = grid_cols * grid_rows
+    key_w, key_h = key_image_format["size"]
+    key_size = (key_w, key_h)
+
+    # Fixed control button positions
+    submit_key = total_keys - 1  # bottom-right
+    cancel_key = total_keys - grid_cols  # bottom-left
+
+    # Determine which keys are control buttons
+    control_key_map: dict[int, tuple[str, str, str]] = {}  # key → (label, bg, fg)
+    if "submit" in control_buttons:
+        control_key_map[submit_key] = (control_buttons["submit"], ASK_SUBMIT_BG, ASK_CONTROL_FG)
+    if "next" in control_buttons:
+        control_key_map[submit_key] = (control_buttons["next"], ASK_NAV_BG, ASK_CONTROL_FG)
+    if "cancel" in control_buttons:
+        control_key_map[cancel_key] = (control_buttons["cancel"], ASK_CANCEL_BG, ASK_CONTROL_FG)
+    if "back" in control_buttons:
+        control_key_map[cancel_key] = (control_buttons["back"], ASK_NAV_BG, ASK_CONTROL_FG)
+
+    # Assign options to remaining keys (left-to-right, top-to-bottom)
+    option_keys: list[int] = []
+    for key in range(total_keys):
+        if key not in control_key_map and len(option_keys) < len(options):
+            option_keys.append(key)
+
+    # Page info key: the empty key immediately left of Submit/Next (submit_key - 1),
+    # only if that key is not used by options or controls
+    page_info_key = -1
+    if page_info:
+        candidate = submit_key - 1
+        if candidate not in control_key_map and candidate not in option_keys:
+            page_info_key = candidate
+
+    result: dict[int, bytes] = {}
+    for key in range(total_keys):
+        if key in control_key_map:
+            label, bg, fg = control_key_map[key]
+            tile = _render_full_button(key_size, label, bg, fg)
+        elif key in option_keys:
+            idx = option_keys.index(key)
+            label = options[idx]
+            is_selected = label in selected
+            bg = ASK_OPTION_SELECTED_BG if is_selected else ASK_OPTION_BG
+            fg = ASK_OPTION_SELECTED_FG if is_selected else ASK_OPTION_FG
+            tile = _render_full_button(key_size, label, bg, fg)
+        elif key == page_info_key:
+            # Page indicator on the key just left of Submit/Next
+            tile = Image.new("RGB", key_size, bg_color)
+            draw = ImageDraw.Draw(tile)
+            font = load_font("regular", FONT_SIZE_SMALL)
+            tw = font.getlength(page_info)
+            draw.text(
+                ((key_w - tw) // 2, key_h // 2 - FONT_SIZE_SMALL // 2),
+                page_info, font=font, fill="#404040",
+            )
+        else:
+            # Empty key with instance background
+            tile = Image.new("RGB", key_size, bg_color)
+        result[key] = pil_to_native(tile, key_image_format)
+
+    return result
+
+
 def pil_to_native(image: Image.Image, key_image_format: dict) -> bytes:
     """Convert a PIL image to Stream Deck native format."""
     from StreamDeck.ImageHelpers import PILHelper

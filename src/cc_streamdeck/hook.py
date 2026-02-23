@@ -30,6 +30,16 @@ def build_request(hook_input: dict) -> PermissionRequest:
     tool_input = hook_input.get("tool_input", {})
     suggestions = hook_input.get("permission_suggestions", [])
 
+    # AskUserQuestion: send tool_input to daemon, no pre-built choices
+    if tool_name == "AskUserQuestion":
+        return PermissionRequest(
+            tool_name=tool_name,
+            tool_input=tool_input,
+            choices=[],
+            raw_hook_input=hook_input,
+            client_pid=os.getppid(),
+        )
+
     choices = [
         PermissionChoice(label="Allow", behavior="allow"),
         PermissionChoice(label="Deny", behavior="deny", message="Denied via Stream Deck"),
@@ -52,6 +62,23 @@ def build_request(hook_input: dict) -> PermissionRequest:
         raw_hook_input=hook_input,
         client_pid=os.getppid(),
     )
+
+
+def build_ask_question_output(hook_input: dict, ask_answers: dict) -> dict:
+    """Build stdout JSON for an AskUserQuestion response with updatedInput."""
+    questions = hook_input.get("tool_input", {}).get("questions", [])
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {
+                "behavior": "allow",
+                "updatedInput": {
+                    "questions": questions,
+                    "answers": ask_answers,
+                },
+            },
+        }
+    }
 
 
 def build_hook_output(chosen: PermissionChoice) -> dict:
@@ -176,7 +203,18 @@ def main() -> None:
 
         _log(f"Response: {response.status}")
 
-        if response.status != "ok" or response.chosen is None:
+        if response.status != "ok":
+            sys.exit(0)
+
+        tool_name = hook_input.get("tool_name", "")
+
+        # AskUserQuestion: build updatedInput.answers from ask_answers
+        if tool_name == "AskUserQuestion" and response.ask_answers:
+            output = build_ask_question_output(hook_input, response.ask_answers)
+            sys.stdout.write(json.dumps(output, ensure_ascii=False))
+            sys.exit(0)
+
+        if response.chosen is None:
             sys.exit(0)
 
         output = build_hook_output(response.chosen)
