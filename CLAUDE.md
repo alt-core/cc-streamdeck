@@ -48,8 +48,6 @@ Claude Code へ結果返却
 - Allow=右下, Deny=Allowの左, Always=DenyとAllowの間（トグル式）
 - Alwaysトグル: 1回押すとON/OFF切替。ON状態でAllowを押すとAlways Allow
 - Always非アクティブ時はラベル文字がグレー、アクティブ時は白
-- PermissionRequest/AskUserQuestion はガード期間中、選択肢ラベルの文字色が暗くなり、期間終了後に通常色に復帰（視覚フィードバック）
-
 ### 表示ガード時間
 
 表示切替直後のボタン押下を防止するガード時間。表示が変わった瞬間に誤って Allow を押す事故を防ぐ。アイテム種別ごとに独立設定:
@@ -60,7 +58,7 @@ Claude Code へ結果返却
 | Fallback / Notification | `display.minor_guard_ms` | 0ms | 即座に操作可能 |
 
 - ガード期間中はボタン押下を無視
-- PermissionRequest はガード中に選択肢ラベルの文字色を暗くして視覚的に操作不可を示す。ガード終了後に `_guard_timer` で再レンダリングして通常色に復帰
+- `display.guard_dim = true` を設定すると、PermissionRequest のガード期間中に選択肢ラベルの文字色を暗くして視覚的に操作不可を示す。ガード終了後に `_guard_timer` で再レンダリングして通常色に復帰（デフォルトOFF）
 - `_guard_for_item(item)`: アイテム種別に応じて適切なガード秒数を返す
 
 ### フォントフォールバック

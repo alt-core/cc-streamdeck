@@ -44,6 +44,8 @@ class UserSettings:
     display_guard_ms: int = 500
     # Fallback / Notification (default 0ms)
     display_minor_guard_ms: int = 0
+    # Dim choice labels during guard period (visual feedback)
+    display_guard_dim: bool = False
 
 
 def load_settings() -> UserSettings:
@@ -134,6 +136,9 @@ def _parse(data: dict) -> UserSettings:
     minor_guard_ms = data.get("display", {}).get("minor_guard_ms")
     if isinstance(minor_guard_ms, int):
         settings.display_minor_guard_ms = max(0, minor_guard_ms)
+    guard_dim = data.get("display", {}).get("guard_dim")
+    if isinstance(guard_dim, bool):
+        settings.display_guard_dim = guard_dim
 
     # [risk.path_*]
     for level, attr in [

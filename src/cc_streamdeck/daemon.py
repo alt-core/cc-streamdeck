@@ -149,6 +149,7 @@ class Daemon:
         self._display_guard_sec = self._settings.display_guard_ms / 1000.0
         self._minor_guard_sec = self._settings.display_minor_guard_ms / 1000.0
         self._display_time: float = 0.0  # monotonic timestamp of last display switch
+        self._guard_dim = self._settings.display_guard_dim
         self._guard_timer: threading.Timer | None = None
 
     def start(self) -> None:
@@ -443,8 +444,9 @@ class Daemon:
             self._display_time = time.monotonic()
             self._cancel_guard_timer()
             guard_sec = self._guard_for_item(best)
-            self._render_item(best, guard_active=(guard_sec > 0))
-            if guard_sec > 0:
+            dim = self._guard_dim and guard_sec > 0
+            self._render_item(best, guard_active=dim)
+            if dim:
                 self._start_guard_timer(guard_sec, best)
 
     def _wait_for_resolution(self, item: _DisplayItem, conn: socket.socket) -> PermissionResponse:

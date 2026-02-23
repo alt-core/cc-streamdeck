@@ -211,3 +211,12 @@ class TestDisplayGuardSettings:
         settings = _parse(data)
         assert settings.display_guard_ms == 500
         assert settings.display_minor_guard_ms == 200
+
+    def test_default_guard_dim_off(self):
+        settings = _parse({})
+        assert settings.display_guard_dim is False
+
+    def test_guard_dim_on(self):
+        data = {"display": {"guard_dim": True}}
+        settings = _parse(data)
+        assert settings.display_guard_dim is True

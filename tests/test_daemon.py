@@ -862,10 +862,26 @@ class TestDisplayGuard:
         daemon._key_callback(None, 0, True)
         assert not item.done_event.is_set()
 
-    def test_guard_timer_re_renders(self, sample_request):
-        """After guard expires, item is re-rendered with guard_active=False."""
+    def test_guard_no_re_render_when_dim_off(self, sample_request):
+        """No re-render timer when guard_dim is off (default)."""
         daemon = _make_ready_daemon()
         daemon._display_guard_sec = 0.1
+        # _guard_dim defaults to False
+
+        item = _make_item(daemon, sample_request)
+        daemon._add_item(item)
+
+        assert daemon.device_state.set_key_images.call_count == 1
+
+        # Wait past guard period — no re-render because dim is off
+        threading.Event().wait(0.2)
+        assert daemon.device_state.set_key_images.call_count == 1
+
+    def test_guard_timer_re_renders_when_dim_on(self, sample_request):
+        """After guard expires, item is re-rendered when guard_dim is on."""
+        daemon = _make_ready_daemon()
+        daemon._display_guard_sec = 0.1
+        daemon._guard_dim = True
 
         item = _make_item(daemon, sample_request)
         daemon._add_item(item)
