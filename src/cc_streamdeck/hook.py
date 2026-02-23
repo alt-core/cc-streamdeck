@@ -1,8 +1,9 @@
-"""Hook Client: invoked by Claude Code's PermissionRequest hook.
+"""Hook Client: invoked by Claude Code's PermissionRequest / Notification hook.
 
 Reads JSON from stdin, communicates with the Daemon via Unix socket,
-and writes the response JSON to stdout. Falls back to terminal prompt
-on any error (exit 0 with no output).
+and writes the response JSON to stdout. Notification hooks are
+fire-and-forget (no stdout). Falls back to terminal prompt on any
+error (exit 0 with no output).
 """
 
 from __future__ import annotations

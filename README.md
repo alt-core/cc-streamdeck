@@ -136,7 +136,6 @@ Claude Code の Notification hook を設定すると、入力待ちなどの状�
     "PermissionRequest": [ ... ],
     "Notification": [
       {
-        "matcher": {},
         "hooks": [
           {
             "type": "command",

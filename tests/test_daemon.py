@@ -645,3 +645,21 @@ class TestDaemonNotification:
 
         assert daemon._background_display.message == "Second"
         assert daemon._background_display.client_pid == 2000
+
+    def test_notification_dismissed_by_button_press(self):
+        """Pressing any button while notification is showing clears it."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = self._make_ready_daemon()
+
+        msg = NotificationMessage(
+            notification_type="idle_prompt", message="Idle", client_pid=1000,
+        )
+        daemon._handle_notification(msg)
+        assert daemon._background_display is not None
+
+        # Simulate button press (no current request active)
+        daemon._key_callback(None, 5, True)
+
+        assert daemon._background_display is None
+        daemon.device_state.clear_keys.assert_called()

@@ -560,27 +560,42 @@ def render_notification(
 
     # Render bottom row as a single wide canvas
     canvas_w = grid_cols * key_w
+    text_color = "#606060"
+
+    # OK label area on bottom-right key
+    ok_area = CHOICE_LABEL_HEIGHT
+    text_max_y = key_h - ok_area
+
+    # Choose font size: 20 → 16 → 10, largest that fits
+    chosen_size = FONT_SIZE_SMALL
+    for size in [FONT_SIZE_LARGE, FONT_SIZE_MEDIUM, FONT_SIZE_SMALL]:
+        font = load_font("regular", size)
+        wrapped = _wrap_text(message, font, canvas_w - 4)
+        total_height = len(wrapped) * size
+        if total_height <= text_max_y:
+            chosen_size = size
+            break
+
+    font = load_font("regular", chosen_size)
+    wrapped = _wrap_text(message, font, canvas_w - 4)
+    max_lines = text_max_y // chosen_size
+    wrapped = wrapped[:max_lines]
+
     canvas = Image.new("RGB", (canvas_w, key_h), bg_color)
     draw = ImageDraw.Draw(canvas)
 
-    font = load_font("regular", FONT_SIZE_SMALL)
-    text_color = "#606060"
-
-    # Wrap and draw text
-    wrapped = _wrap_text(message, font, canvas_w - 4)
-    max_lines = key_h // FONT_SIZE_SMALL
-    wrapped = wrapped[:max_lines]
-
-    total_height = len(wrapped) * FONT_SIZE_SMALL
-    y = (key_h - total_height) // 2
+    total_height = len(wrapped) * chosen_size
+    y = (text_max_y - total_height) // 2
     for line in wrapped:
         draw.text((2, y), line, font=font, fill=text_color)
-        y += FONT_SIZE_SMALL
+        y += chosen_size
 
     # Split canvas into per-key tiles
     result: dict[int, bytes] = {}
     black = Image.new("RGB", (key_w, key_h), "#000000")
     black_bytes = pil_to_native(black, key_image_format)
+
+    ok_key = total_keys - 1  # bottom-right
 
     for key in range(total_keys):
         if key < bottom_start:
@@ -589,6 +604,8 @@ def render_notification(
             col = key - bottom_start
             x = col * key_w
             tile = canvas.crop((x, 0, x + key_w, key_h))
+            if key == ok_key:
+                tile = _overlay_choice_label(tile, "OK", "#404040")
             result[key] = pil_to_native(tile, key_image_format)
 
     return result

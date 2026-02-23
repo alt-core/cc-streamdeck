@@ -365,6 +365,11 @@ class Daemon:
             return
 
         if self._current_request is None:
+            # Notification showing: any button press dismisses it
+            with self._background_lock:
+                if self._background_display is not None:
+                    self._background_display = None
+                    self.device_state.clear_keys()
             return
 
         # Fallback mode: any button dismisses the display
