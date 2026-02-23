@@ -320,6 +320,50 @@ def render_permission_request(
     return result
 
 
+def render_fallback_message(
+    tool_name: str,
+    key_image_format: dict,
+    grid_cols: int = GRID_COLS,
+    grid_rows: int = GRID_ROWS,
+) -> dict[int, bytes]:
+    """Render a 'see terminal' fallback message across all buttons.
+
+    Used for tools like ExitPlanMode that cannot be handled via the hook.
+    Any button press dismisses the display.
+    """
+    key_w, key_h = key_image_format["size"]
+    vw = grid_cols * key_w
+    vh = grid_rows * key_h
+
+    virtual = Image.new("RGB", (vw, vh), "#1A0A00")
+    draw = ImageDraw.Draw(virtual)
+
+    header_font = load_font("bold", FONT_SIZE_LARGE)
+    body_font = load_font("regular", FONT_SIZE_MEDIUM)
+    _, header_descent = header_font.getmetrics()
+
+    # Header
+    draw.rectangle([(0, 0), (vw, FONT_SIZE_LARGE - 1)], fill="#604000")
+    draw.text((0, -header_descent), f" {tool_name}", font=header_font, fill="#FFD080")
+
+    # Body message
+    y = FONT_SIZE_LARGE + 4
+    for line in ["→ ターミナルで操作", "", "(押すと閉じる)"]:
+        draw.text((0, y), line, font=body_font, fill="#C0C0C0")
+        y += FONT_SIZE_MEDIUM
+
+    # Split into tiles
+    result: dict[int, bytes] = {}
+    for key in range(grid_cols * grid_rows):
+        col, row = _key_position(key, grid_cols)
+        x = col * key_w
+        y = row * key_h
+        tile = virtual.crop((x, y, x + key_w, y + key_h))
+        result[key] = pil_to_native(tile, key_image_format)
+
+    return result
+
+
 def pil_to_native(image: Image.Image, key_image_format: dict) -> bytes:
     """Convert a PIL image to Stream Deck native format."""
     from StreamDeck.ImageHelpers import PILHelper

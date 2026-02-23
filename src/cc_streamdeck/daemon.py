@@ -15,7 +15,7 @@ from .protocol import (
     decode_request,
     encode,
 )
-from .renderer import compute_layout, render_permission_request
+from .renderer import compute_layout, render_fallback_message, render_permission_request
 from .risk import RiskConfig, assess_risk, instance_palette_index, load_risk_config
 from .settings import load_settings
 
@@ -210,6 +210,10 @@ class Daemon:
             from .config import GRID_COLS, GRID_ROWS
             grid_cols, grid_rows = GRID_COLS, GRID_ROWS
 
+        # Tools that cannot be handled via hook — show fallback message
+        if request.tool_name in ("ExitPlanMode", "AskUserQuestion"):
+            return self._process_fallback(request, key_format, grid_cols, grid_rows, conn)
+
         self._always_active = False
         self._current_request = request
         self._current_client_pid = request.client_pid
@@ -300,6 +304,11 @@ class Daemon:
         if self._current_request is None:
             return
 
+        # Fallback mode: any button dismisses the display
+        if self._current_request.tool_name in ("ExitPlanMode", "AskUserQuestion"):
+            self._response_event.set()
+            return
+
         num_choices = len(self._current_request.choices)
         _, choice_keys = compute_layout(
             num_choices, self._current_grid_cols, self._current_grid_rows
@@ -331,6 +340,49 @@ class Daemon:
 
         self._response = PermissionResponse(status="ok", chosen=chosen)
         self._response_event.set()
+
+    def _process_fallback(
+        self,
+        request,
+        key_format: dict,
+        grid_cols: int,
+        grid_rows: int,
+        conn: socket.socket | None = None,
+    ) -> PermissionResponse:
+        """Show 'see terminal' message and wait for any button to dismiss."""
+        logger.info("Fallback display for %s (not handled via hook)", request.tool_name)
+
+        self._current_request = request
+        self._current_client_pid = request.client_pid
+        self._current_grid_cols = grid_cols
+        self._current_grid_rows = grid_rows
+        self._response_event.clear()
+        self._response = None
+
+        images = render_fallback_message(
+            request.tool_name, key_format,
+            grid_cols=grid_cols, grid_rows=grid_rows,
+        )
+        self.device_state.set_key_images(images)
+
+        # Wait for any button press, cancel, or client disconnect
+        elapsed = 0.0
+        while elapsed < HOOK_TIMEOUT:
+            if self._response_event.wait(timeout=1.0):
+                break
+            elapsed += 1.0
+            if self._cancel_event.is_set():
+                break
+            if conn is not None:
+                try:
+                    conn.sendall(b"\n")
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    break
+
+        self.device_state.clear_keys()
+        self._current_request = None
+        self._current_client_pid = 0
+        return PermissionResponse(status="fallback")
 
     def _rerender_current(self) -> None:
         """Re-render current request with updated always_active state."""

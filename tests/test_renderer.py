@@ -313,6 +313,37 @@ class TestRenderPermissionRequest:
             assert isinstance(v, bytes)
 
 
+class TestRenderFallbackMessage:
+    MOCK_FORMAT = {
+        "size": (80, 80),
+        "format": "BMP",
+        "flip": (False, True),
+        "rotation": 90,
+    }
+
+    def test_returns_all_keys(self):
+        from cc_streamdeck.renderer import render_fallback_message
+
+        result = render_fallback_message("ExitPlanMode", self.MOCK_FORMAT)
+        assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
+
+    def test_returns_bytes(self):
+        from cc_streamdeck.renderer import render_fallback_message
+
+        result = render_fallback_message("ExitPlanMode", self.MOCK_FORMAT)
+        for v in result.values():
+            assert isinstance(v, bytes)
+            assert len(v) > 0
+
+    def test_custom_grid(self):
+        from cc_streamdeck.renderer import render_fallback_message
+
+        result = render_fallback_message(
+            "ExitPlanMode", self.MOCK_FORMAT, grid_cols=5, grid_rows=3
+        )
+        assert set(result.keys()) == set(range(15))
+
+
 class TestTruncation:
     def test_overflow_text_still_renders(self):
         """Even very long text should render without error."""

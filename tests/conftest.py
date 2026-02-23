@@ -24,6 +24,19 @@ def sample_request():
 
 
 @pytest.fixture
+def exit_plan_mode_request():
+    return PermissionRequest(
+        tool_name="ExitPlanMode",
+        tool_input={"allowedPrompts": [{"tool": "Bash", "prompt": "run tests"}]},
+        choices=[
+            PermissionChoice(label="Allow", behavior="allow"),
+            PermissionChoice(label="Deny", behavior="deny", message="Denied"),
+        ],
+        raw_hook_input={"hook_event_name": "PermissionRequest", "tool_name": "ExitPlanMode"},
+    )
+
+
+@pytest.fixture
 def two_choice_request():
     return PermissionRequest(
         tool_name="Write",

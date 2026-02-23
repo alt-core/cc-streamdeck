@@ -227,3 +227,69 @@ class TestDaemonProcessRequest:
 
         assert resp.status == "ok"
         assert resp.chosen.label == "Allow"
+
+
+class TestDaemonFallback:
+    """Tests for ExitPlanMode and other fallback tools."""
+
+    def _make_ready_daemon(self):
+        daemon = Daemon()
+        daemon.device_state = MagicMock()
+        daemon.device_state.status = "ready"
+        daemon.device_state.get_key_image_format.return_value = {
+            "size": (80, 80),
+            "format": "BMP",
+            "flip": (False, True),
+            "rotation": 90,
+        }
+        daemon.device_state.get_grid_layout.return_value = (2, 3, 6)
+        return daemon
+
+    def test_exit_plan_mode_returns_fallback(self, exit_plan_mode_request):
+        daemon = self._make_ready_daemon()
+
+        # Simulate button press after short delay
+        def press_button():
+            threading.Event().wait(0.3)
+            daemon._key_callback(None, 0, True)  # Any button works
+
+        t = threading.Thread(target=press_button)
+        t.start()
+
+        resp = daemon._process_request(exit_plan_mode_request)
+        t.join()
+
+        assert resp.status == "fallback"
+        assert resp.chosen is None
+        daemon.device_state.clear_keys.assert_called_once()
+
+    def test_exit_plan_mode_any_button_dismisses(self, exit_plan_mode_request):
+        daemon = self._make_ready_daemon()
+
+        # Set up the request state as _process_fallback would
+        daemon._current_request = exit_plan_mode_request
+        daemon._response_event.clear()
+
+        # Any key press (including message area keys) should dismiss
+        daemon._key_callback(None, 2, True)
+        assert daemon._response_event.is_set()
+
+    def test_exit_plan_mode_key_release_ignored(self, exit_plan_mode_request):
+        daemon = self._make_ready_daemon()
+        daemon._current_request = exit_plan_mode_request
+        daemon._response_event.clear()
+
+        daemon._key_callback(None, 0, False)  # key-up
+        assert not daemon._response_event.is_set()
+
+    def test_exit_plan_mode_client_disconnect(self, exit_plan_mode_request):
+        daemon = self._make_ready_daemon()
+
+        server_sock, client_sock = socket.socketpair()
+        client_sock.close()
+
+        resp = daemon._process_request(exit_plan_mode_request, server_sock)
+        server_sock.close()
+
+        assert resp.status == "fallback"
+        daemon.device_state.clear_keys.assert_called_once()

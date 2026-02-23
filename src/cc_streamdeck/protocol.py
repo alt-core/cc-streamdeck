@@ -33,7 +33,7 @@ class PermissionRequest:
 class PermissionResponse:
     """Sent from Daemon to Hook Client."""
 
-    status: Literal["ok", "no_device", "error"] = "ok"
+    status: Literal["ok", "no_device", "error", "fallback"] = "ok"
     chosen: PermissionChoice | None = None
     error_message: str = ""
     type: Literal["permission_response"] = "permission_response"
