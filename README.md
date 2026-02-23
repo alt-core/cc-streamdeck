@@ -1,10 +1,12 @@
 # cc-streamdeck
 
-Claude Code の権限確認プロンプト（Allow / Deny / Always Allow）を Stream Deck Mini に表示し、ボタン押下で応答するシステム。
+Claude Code の権限確認プロンプト（Allow / Deny / Always Allow）を Stream Deck に表示し、ボタン押下で応答するシステム。
+
+> **注意**: このプロジェクトは個人利用のために作ったものを、同じことをしたい方の参考になればと思い公開しています。**動作確認は Stream Deck Mini のみ**で行っており、他モデル（Original/MK.2/XL/Plus）では未検証です。Mini 以外で問題がある場合は fork して修正してください。Issue やサポート対応は行っていません。
 
 ```
-Claude Code → PermissionRequest Hook → Hook Client → Unix Socket → Daemon → Stream Deck Mini
-                                                                          ← ボタン押下 ← ユーザー
+Claude Code → Hook (stdin JSON) → Hook Client → Unix Socket → Daemon → Stream Deck
+                                                                     ← ボタン押下 ← ユーザー
 ```
 
 ## Stream Deck Mini レイアウト (3x2)
@@ -27,9 +29,7 @@ Claude Code → PermissionRequest Hook → Hook Client → Unix Socket → Daemo
 ## 前提条件
 
 - macOS または Linux
-- Stream Deck（Mini, Original/MK.2, XL, Plus）
-  > 動作確認は Stream Deck Mini のみで行っています（作者の手元にある機種のため）。レイアウトはデバイスのグリッドサイズから動的に計算されるため、他モデルでも動作する想定ですが、Mini 以外は未検証です。
-  >
+- Stream Deck（Mini, Original/MK.2, XL, Plus — Mini 以外は未検証）
   > **Elgato 公式の Stream Deck ソフトウェアは終了してください。** 本ツールは USB/HID で直接デバイスと通信するため、公式ソフトウェアと同時には使用できません。
 - [Claude Code](https://claude.ai/code) CLI
 - Python 3.11+
@@ -89,7 +89,7 @@ echo $(pwd)/.venv/bin/cc-streamdeck-hook  # uv sync の場合
 
 ## 使い方
 
-Daemon は Hook Client から自動起動されるため、特別な操作は不要。Claude Code が権限確認を求めると、Stream Deck Mini にメッセージと選択肢が表示される。
+Daemon は Hook Client から自動起動されるため、特別な操作は不要。Claude Code が権限確認を求めると、Stream Deck にメッセージと選択肢が表示される。
 
 ```bash
 # 手動で Daemon を起動
@@ -168,17 +168,30 @@ critical_fg = "#FFFFFF"
 palette = ["#0A0A20", "#0A200A", "#200A0A", "#1A1A0A", "#150A20"]
 
 [risk.tools]
-Bash = "evaluate"   # コマンド内容でパターン評価
-Write = "high"
+Bash = "evaluate"   # コマンド内容でパターン評価（デフォルト）
+Write = "high"      # 固定リスクレベルも指定可
 
-[risk.bash_critical]
-patterns = ['terraform\s+destroy']  # built-in に追加
+# Bash パターンの追加（built-in ルールの前に評価される）
+[[risk.bash.prepend]]
+name = "terraform-destroy"
+pattern = "terraform * destroy"     # シンプル記法: * → .*, 単語間は \s+
+level = "critical"
 
-[risk.bash_low]
-patterns = ['^\s*my-safe-tool\b']
+[[risk.bash.prepend]]
+name = "my-safe-tool"
+pattern = "regex:^\\s*my-safe-tool\\b"  # regex: プレフィックスで正規表現
+level = "low"
+
+# Write/Edit のファイルパスによるリスク引き上げ
+[risk.path_high]
+patterns = ['/etc/.*', '.*\.env$']
+
+# 表示する通知の種類（Notification hook 使用時）
+[notification]
+types = ["idle_prompt", "auth_success", "elicitation_dialog"]  # デフォルト
 ```
 
-設定はデーモン起動時に1回読み込み。変更後は `cc-streamdeck-daemon --stop` で再起動。
+設定はデーモン起動時に1回読み込み。変更後は `cc-streamdeck-daemon --stop` で停止すれば、次の hook 呼び出し時に自動再起動される。
 
 ## 開発
 
