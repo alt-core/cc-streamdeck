@@ -21,6 +21,8 @@ Claude Code → PermissionRequest Hook → Hook Client → Unix Socket → Daemo
 - 全6ボタンがメッセージ表示領域として使われ、選択肢は下段ボタンの下部20pxに色付きラベルとしてオーバーレイ
 - **Always はトグル式**: 1回押すとON/OFF切替（色が変わる）。ON状態で Allow を押すと Always Allow として送信
 - テキスト量に応じてフォントサイズを自動選択（20px → 16px → 10px）。溢れる場合は `...` で省略
+- **ヘッダ色でリスク表示**: ツール名ヘッダの背景色+文字色が操作の危険度に応じて4段階に変化
+- **ボディ色でインスタンス識別**: 複数の Claude Code を並行実行しているとき、ボディ背景色でどのインスタンスかを区別
 
 ## 前提条件
 
@@ -101,6 +103,42 @@ cc-streamdeck-daemon --stop
 - **フォールバック**: デバイス未接続時やエラー時は通常の端末確認プロンプトにフォールバック
 - **PPID ベースキャンセル**: ターミナルで応答後に次のリクエストが来ると、同じ Claude インスタンスからの古いリクエストを自動キャンセル
 - **自動終了**: Stream Deck が24時間接続されない場合、Daemon は自動終了
+
+### リスクレベル色
+
+ヘッダ（ツール名）の背景色と文字色で操作の危険度を表示:
+
+| レベル | 対象の例 |
+|--------|----------|
+| **critical** (赤) | `rm -rf`, `sudo`, `git push --force`, `curl\|bash` |
+| **high** (琥珀) | `rm`, `git push`, `curl`, `pip install`, `mv` |
+| **medium** (紺) | Write, Edit, WebFetch, 未知コマンド |
+| **low** (暗灰) | `ls`, `cat`, `git status`, `npm test` |
+
+### 設定ファイル
+
+`~/.config/cc-streamdeck/config.toml` で色やリスク評価ルールをカスタマイズ可能（全セクション省略可）:
+
+```toml
+[colors.risk]
+critical_bg = "#800000"
+critical_fg = "#FFFFFF"
+
+[colors.instance]
+palette = ["#0A0A20", "#0A200A", "#200A0A", "#1A1A0A", "#150A20"]
+
+[risk.tools]
+Bash = "evaluate"   # コマンド内容でパターン評価
+Write = "high"
+
+[risk.bash_critical]
+patterns = ['terraform\s+destroy']  # built-in に追加
+
+[risk.bash_low]
+patterns = ['^\s*my-safe-tool\b']
+```
+
+設定はデーモン起動時に1回読み込み。変更後は `cc-streamdeck-daemon --stop` で再起動。
 
 ## 開発
 
