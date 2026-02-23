@@ -80,6 +80,8 @@ echo $(pwd)/.venv/bin/cc-streamdeck-hook  # uv sync の場合
 }
 ```
 
+> **Note**: `timeout` は秒単位。86400 = 24時間。離席して戻ってきても待機し続ける。
+
 ## 使い方
 
 Daemon は Hook Client から自動起動されるため、特別な操作は不要。Claude Code が権限確認を求めると、Stream Deck Mini にメッセージと選択肢が表示される。
@@ -92,7 +94,13 @@ cc-streamdeck-daemon
 cc-streamdeck-daemon --stop
 ```
 
-Stream Deck が未接続の場合、Daemon は `no_device` 状態で待機し、接続されると自動で切り替わる。未接続時のフックは通常の端末確認プロンプトにフォールバックする。
+### 動作仕様
+
+- **Daemon 自動起動**: Hook Client がソケット接続に失敗すると Daemon をバックグラウンドで自動起動
+- **ホットプラグ**: Stream Deck 未接続でも Daemon は待機し、接続されると自動検知（3秒間隔ポーリング）
+- **フォールバック**: デバイス未接続時やエラー時は通常の端末確認プロンプトにフォールバック
+- **PPID ベースキャンセル**: ターミナルで応答後に次のリクエストが来ると、同じ Claude インスタンスからの古いリクエストを自動キャンセル
+- **自動終了**: Stream Deck が24時間接続されない場合、Daemon は自動終了
 
 ## 開発
 

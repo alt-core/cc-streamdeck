@@ -25,11 +25,11 @@ Claude Code へ結果返却
 ### ソースコード構成
 
 - `src/cc_streamdeck/config.py` — 共有定数（ソケットパス、タイムアウト、キーサイズ等）
-- `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response）+ NDJSON encode/decode
+- `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response）+ NDJSON encode/decode。`client_pid` でClaude インスタンス識別
 - `src/cc_streamdeck/renderer.py` — PIL画像生成。6ボタンレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画
-- `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定。Mini Discord Edition (PID 0x00B3) のパッチ含む
-- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御
-- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動。エラー時はexit 0でフォールバック
+- `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
+- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル
+- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。エラー時はexit 0でフォールバック
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
 ### ボタンレイアウト
@@ -43,6 +43,7 @@ Claude Code へ結果返却
 - 全6ボタンがメッセージ表示領域。選択肢は下段ボタンの下部20pxに色付きラベルとしてオーバーレイ
 - Allow=右下(key 5), Deny=左下(key 3), Always=中央下(key 4, トグル式)
 - Alwaysトグル: 1回押すとON/OFF切替。ON状態でAllowを押すとAlways Allow
+- Always非アクティブ時はラベル文字がグレー、アクティブ時は白
 
 ### フォントフォールバック
 
@@ -51,6 +52,8 @@ Claude Code へ結果返却
 2. **16px** M PLUS 1 Code (アンチエイリアス) — 中程度のテキスト
 3. **10px** PixelMplus10 (ドット・バイ・ドット) — 長いテキスト
 4. 10pxでも溢れる場合は末尾を `...` で省略
+
+ヘッダ行（ツール名）は本文10pxフォールバック時のみ20pxを維持。本文16pxのときはヘッダも16px。
 
 ### Hook連携: PermissionRequest
 
@@ -76,9 +79,13 @@ Claude Code の **PermissionRequest** hook を使用。権限確認ダイアロ�
 }
 ```
 
+### PPIDベースキャンセル
+
+Claude Code は PermissionRequest hook プロセスをターミナル応答後も kill しない（既知のバグ: GitHub #15433）。そのため、hook が `os.getppid()` を `client_pid` として daemon に送信し、同じ Claude インスタンスから新しいリクエストが来たら、処理中の古いリクエストを自動キャンセルする。
+
 ### Daemon自動起動とデバイス状態管理
 
-Hook Client はソケット接続失敗時にDaemonを自動起動（lazy init）。Daemonは `DeviceState.status` で `"ready"` / `"no_device"` を管理し、3秒間隔のポーリングでUSBホットプラグに対応。Hook Clientはデバイス状態を気にせずDaemonの応答だけで分岐する。
+Hook Client はソケット接続失敗時にDaemonを自動起動（lazy init）。Daemon パスは `sys.executable` の親ディレクトリから解決（.venv/bin/ が PATH に無くても動作）。Daemonは `DeviceState.status` で `"ready"` / `"no_device"` を管理し、3秒間隔のポーリングでUSBホットプラグに対応。24時間デバイス未接続で自動終了。
 
 ### デバイスライフサイクル
 
@@ -89,9 +96,9 @@ Hook Client はソケット接続失敗時にDaemonを自動起動（lazy init�
 
 ### スレッドモデル (daemon.py)
 
-- メインスレッド: Unix socketサーバ（accept loop）
-- 接続ハンドラスレッド: Hook Client接続の処理（`_request_lock`で直列化）
-- デバイスポーリングスレッド: DeviceStateのデーモンスレッド
+- メインスレッド: Unix socketサーバ（accept loop、デバイスポーリングスレッド終了も監視）
+- 接続ハンドラスレッド: Hook Client接続の処理（`_request_lock`で直列化、PPIDベースキャンセル発火）
+- デバイスポーリングスレッド: DeviceStateのデーモンスレッド（24時間未接続でself._running=False）
 - StreamDeckライブラリ内部スレッド: `_key_callback` 配信（`with deck:` で排他制御）
 
 ## Commands
@@ -131,6 +138,7 @@ uv run cc-streamdeck-daemon --stop   # Daemon停止
 - メッセージ表示領域を最大化、選択肢はボタン下部20pxの色付きラベルのみ
 - フォント幅計算は `getlength()` (advance width) を使用。`getbbox()` はピクセル範囲で等幅が崩れる
 - テキスト描画は descent 分上にシフトして行間をピチピチに詰める
-- Alwaysは安全のためトグル式（誤タップ防止）
+- Alwaysは安全のためトグル式（誤タップ防止）。非アクティブ時はグレー文字
 - Hook Client は高速起動・応答が必須（Claude Code がブロックされるため）
 - あらゆるエラーで exit 0（出力なし）→ 端末フォールバック（ユーザーがスタックしない）
+- PPIDベースキャンセルでターミナル応答後の古いリクエストを自動クリア
