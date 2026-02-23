@@ -280,7 +280,7 @@ class TestRiskConfigMerge:
     def test_default_config(self):
         config = load_risk_config()
         assert "critical" in config.risk_colors
-        assert len(config.instance_palette) == 5
+        assert len(config.instance_palette) == 10
         assert config.body_text_color == "white"
 
     def test_user_color_override(self):
