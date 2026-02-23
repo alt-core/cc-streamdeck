@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-cc_streamdeck は、Claude Code の権限確認プロンプト（Allow/Deny/Always）を Stream Deck Mini（6ボタン、3x2グリッド、各80x80px）に表示し、ボタン押下で応答するシステム。6ボタン全体を1つのディスプレイとして使い、メッセージ表示領域を最大化しつつ選択肢をコンパクトに表示する。
+cc_streamdeck は、Claude Code の権限確認プロンプト（Allow/Deny/Always）を Stream Deck に表示し、ボタン押下で応答するシステム。全ボタンを1つの連結ディスプレイとして使い、メッセージ表示領域を最大化しつつ選択肢をコンパクトに表示する。Mini/Original/MK.2/XL/Plus に対応（動的グリッドレイアウト）。動作確認は Mini のみ。
 
 ## Architecture
 
@@ -28,22 +28,24 @@ Claude Code へ結果返却
 - `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response）+ NDJSON encode/decode。`client_pid` でClaude インスタンス識別
 - `src/cc_streamdeck/settings.py` — TOML設定ファイル読み込み（`~/.config/cc-streamdeck/config.toml`、XDG準拠）。tomllib使用
 - `src/cc_streamdeck/risk.py` — リスク評価エンジン。4段階（critical/high/medium/low）、Bashパターンマッチ、パス引き上げ、インスタンスパレット管理
-- `src/cc_streamdeck/renderer.py` — PIL画像生成。6ボタンレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
-- `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
-- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→リスク評価→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル、設定読み込み
+- `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、フォールバックメッセージ表示。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
+- `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、`get_grid_layout()` でデバイスのグリッドサイズ取得、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
+- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→リスク評価→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル、フォールバック表示、設定読み込み
 - `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。エラー時はexit 0でフォールバック
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
 ### ボタンレイアウト
 
+レイアウトは `deck.key_layout()` から動的計算。`compute_layout()` が選択肢を下段右詰めに配置:
+
 ```
-3択時:                    2択時:
+3択時 (Mini 3x2):         2択時:
 [msg  ] [msg  ] [msg  ]   [msg  ] [msg  ] [msg  ]
 [Deny ] [Alwys] [Allow]   [msg  ] [Deny ] [Allow]
 ```
 
-- 全6ボタンがメッセージ表示領域。選択肢は下段ボタンの下部20pxに色付きラベルとしてオーバーレイ
-- Allow=右下(key 5), Deny=左下(key 3), Always=中央下(key 4, トグル式)
+- 全ボタンがメッセージ表示領域。選択肢は下段ボタンの下部20pxに色付きラベルとしてオーバーレイ
+- Allow=右下, Deny=Allowの左, Always=DenyとAllowの間（トグル式）
 - Alwaysトグル: 1回押すとON/OFF切替。ON状態でAllowを押すとAlways Allow
 - Always非アクティブ時はラベル文字がグレー、アクティブ時は白
 
@@ -102,6 +104,14 @@ Claude Code の **PermissionRequest** hook を使用。権限確認ダイアロ�
   }
 }
 ```
+
+### フォールバック表示
+
+ExitPlanMode や AskUserQuestion など、hook の `allow`/`deny` では適切にハンドリングできないツールは、Stream Deck に「→ ターミナルで操作」メッセージを表示し、任意のボタン押下で dismiss。daemon は `status="fallback"` を返し、hook は exit 0（出力なし）でターミナルプロンプトにフォールバックする。
+
+- `_process_fallback()`: フォールバックメッセージ表示 + ボタン待ち + クライアント切断監視
+- `render_fallback_message()`: 琥珀色ヘッダ + 誘導メッセージの画像生成
+- `_key_callback()` でフォールバックツール判定時は全ボタンが dismiss トリガー
 
 ### PPIDベースキャンセル
 
@@ -168,3 +178,5 @@ uv run cc-streamdeck-daemon --stop   # Daemon停止
 - PPIDベースキャンセルでターミナル応答後の古いリクエストを自動クリア
 - リスク評価: low は確実にread-onlyな操作のみ。誤判定の余地があるものはmedium以上。未知コマンドはmedium
 - 設定ファイルのユーザーパターンはbuilt-inに加算（上書きではない、安全性のため）
+- hook の allow/deny で扱えないツール（ExitPlanMode, AskUserQuestion）はフォールバック表示でターミナルに誘導
+- レイアウトは `deck.key_layout()` から動的計算。Mini以外のモデルでもコード変更なしで動作する設計
