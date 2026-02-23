@@ -48,6 +48,20 @@ Claude Code へ結果返却
 - Allow=右下, Deny=Allowの左, Always=DenyとAllowの間（トグル式）
 - Alwaysトグル: 1回押すとON/OFF切替。ON状態でAllowを押すとAlways Allow
 - Always非アクティブ時はラベル文字がグレー、アクティブ時は白
+- PermissionRequest/AskUserQuestion はガード期間中、選択肢ラベルの文字色が暗くなり、期間終了後に通常色に復帰（視覚フィードバック）
+
+### 表示ガード時間
+
+表示切替直後のボタン押下を防止するガード時間。表示が変わった瞬間に誤って Allow を押す事故を防ぐ。アイテム種別ごとに独立設定:
+
+| 種別 | 設定キー | デフォルト | 対象 |
+|------|----------|-----------|------|
+| PermissionRequest / AskUserQuestion | `display.guard_ms` | 500ms | 誤 Allow 防止 |
+| Fallback / Notification | `display.minor_guard_ms` | 0ms | 即座に操作可能 |
+
+- ガード期間中はボタン押下を無視
+- PermissionRequest はガード中に選択肢ラベルの文字色を暗くして視覚的に操作不可を示す。ガード終了後に `_guard_timer` で再レンダリングして通常色に復帰
+- `_guard_for_item(item)`: アイテム種別に応じて適切なガード秒数を返す
 
 ### フォントフォールバック
 
@@ -79,7 +93,7 @@ Bash: 正規表現パターンマッチ（critical→low→high→medium の優�
 
 ### 設定ファイル
 
-`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別をカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
+`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別、表示ガード時間をカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
 
 ### Hook連携: PermissionRequest
 
@@ -143,9 +157,10 @@ ExitPlanMode など、hook の `allow`/`deny` では適切にハンドリング�
 **主要メソッド:**
 - `_add_item(item)`: リストに追加。同一PIDの既存アイテムは除去（`done_event` をエラーで起こす）。`_select_and_display()` を呼ぶ
 - `_remove_item(item)`: リストから除去。`_select_and_display()` を呼ぶ
-- `_select_and_display()`: `max(self._items, key=lambda i: (i.priority, i.timestamp))` で最優先アイテムを選択し、表示が変わった場合のみ `_render_item()` を呼ぶ
+- `_select_and_display()`: `max(self._items, key=lambda i: (i.priority, i.timestamp))` で最優先アイテムを選択し、表示が変わった場合のみ `_render_item()` を呼ぶ。ガード時間がある場合は `guard_active=True` でレンダリングし、タイマーで期限後に `guard_active=False` で再レンダリング
 - `_wait_for_resolution(item, conn)`: 接続ハンドラスレッドが per-item `done_event` を1秒ポーリングで待機。client 切断検出時は `_remove_item()` で除去
-- `_render_item(item)`: item_type に応じて適切な renderer を呼ぶ
+- `_render_item(item, guard_active)`: item_type に応じて適切な renderer を呼ぶ。permission 時は `guard_active` を `render_permission_request()` に渡す
+- `_guard_for_item(item)`: アイテム種別に応じて `_display_guard_sec`（permission/ask）または `_minor_guard_sec`（fallback/notification）を返す
 
 **動作:**
 - **同一PID上書き**: `_add_item` が同一PID既存アイテムを自動除去。superseded アイテムの接続スレッドは `done_event` で起こされ、エラー応答を返す

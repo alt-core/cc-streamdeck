@@ -145,6 +145,11 @@ class Daemon:
         self._settings = load_settings()
         self._risk_config: RiskConfig = load_risk_config(self._settings)
         self._seen_pids: list[int] = []
+        # Guard time: ignore button presses for this duration after display switch
+        self._display_guard_sec = self._settings.display_guard_ms / 1000.0
+        self._minor_guard_sec = self._settings.display_minor_guard_ms / 1000.0
+        self._display_time: float = 0.0  # monotonic timestamp of last display switch
+        self._guard_timer: threading.Timer | None = None
 
     def start(self) -> None:
         """Main entry point for the daemon."""
@@ -178,6 +183,7 @@ class Daemon:
     def shutdown(self) -> None:
         """Gracefully shut down the daemon."""
         self._running = False
+        self._cancel_guard_timer()
         self.device_state.stop()
         if self._server_socket:
             self._server_socket.close()
@@ -432,8 +438,14 @@ class Daemon:
         if best is None:
             if prev is not None:
                 self.device_state.clear_keys()
+            self._cancel_guard_timer()
         elif best is not prev:
-            self._render_item(best)
+            self._display_time = time.monotonic()
+            self._cancel_guard_timer()
+            guard_sec = self._guard_for_item(best)
+            self._render_item(best, guard_active=(guard_sec > 0))
+            if guard_sec > 0:
+                self._start_guard_timer(guard_sec, best)
 
     def _wait_for_resolution(self, item: _DisplayItem, conn: socket.socket) -> PermissionResponse:
         """Block until the item is resolved (button press, disconnect, timeout)."""
@@ -457,6 +469,29 @@ class Daemon:
         self._remove_item(item)
         return PermissionResponse(status="error", error_message="Timeout")
 
+    def _cancel_guard_timer(self) -> None:
+        """Cancel any pending guard expiry timer."""
+        if self._guard_timer is not None:
+            self._guard_timer.cancel()
+            self._guard_timer = None
+
+    def _start_guard_timer(self, delay: float, item: _DisplayItem) -> None:
+        """Schedule a re-render after guard period expires."""
+        def _on_guard_expired():
+            self._guard_timer = None
+            if self._current_item is item:
+                self._render_item(item, guard_active=False)
+
+        self._guard_timer = threading.Timer(delay, _on_guard_expired)
+        self._guard_timer.daemon = True
+        self._guard_timer.start()
+
+    def _guard_for_item(self, item: _DisplayItem) -> float:
+        """Return the guard duration (seconds) appropriate for this item type."""
+        if item.item_type in ("fallback", "notification"):
+            return self._minor_guard_sec
+        return self._display_guard_sec
+
     # -- Rendering --
 
     def _get_grid(self) -> tuple[int, int]:
@@ -468,7 +503,7 @@ class Daemon:
         from .config import GRID_COLS, GRID_ROWS
         return GRID_COLS, GRID_ROWS
 
-    def _render_item(self, item: _DisplayItem) -> None:
+    def _render_item(self, item: _DisplayItem, guard_active: bool = False) -> None:
         """Render an item on the Stream Deck."""
         if self.device_state.status != "ready":
             return
@@ -500,6 +535,7 @@ class Daemon:
                 header_fg_color=item.header_fg,
                 body_fg_color=item.body_fg,
                 grid_cols=grid_cols, grid_rows=grid_rows,
+                guard_active=guard_active,
             )
         self.device_state.set_key_images(images)
 
@@ -564,6 +600,13 @@ class Daemon:
         item = self._current_item
         if item is None:
             return
+
+        # Guard time: ignore presses too soon after display switch
+        guard_sec = self._guard_for_item(item)
+        if guard_sec > 0:
+            elapsed = time.monotonic() - self._display_time
+            if elapsed < guard_sec:
+                return
 
         if item.item_type == "notification":
             self._remove_item(item)

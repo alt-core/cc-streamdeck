@@ -212,17 +212,24 @@ def _choose_font_size(
     return FONT_SIZE_SMALL
 
 
-def _choice_appearance(choice: PermissionChoice, always_active: bool) -> tuple[str, str, str]:
-    """Return (label, bg_color, text_color) for a choice button."""
+def _choice_appearance(
+    choice: PermissionChoice, always_active: bool, guard_active: bool = False,
+) -> tuple[str, str, str]:
+    """Return (label, bg_color, text_color) for a choice button.
+
+    When guard_active is True, text colors are dimmed to indicate
+    button presses are not yet accepted.
+    """
+    guard_dim = "#404040"  # Dimmed text color during guard period
     if choice.updated_permissions:
         if always_active:
-            return (choice.label, CHOICE_COLORS["always_on"], "white")
-        return (choice.label, CHOICE_COLORS["always_off"], "#808080")
+            return (choice.label, CHOICE_COLORS["always_on"], guard_dim if guard_active else "white")
+        return (choice.label, CHOICE_COLORS["always_off"], guard_dim if guard_active else "#808080")
     if choice.behavior == "deny":
-        return (choice.label, CHOICE_COLORS["deny"], "white")
+        return (choice.label, CHOICE_COLORS["deny"], guard_dim if guard_active else "white")
     if always_active:
-        return (choice.label, CHOICE_COLORS["allow_always"], "white")
-    return (choice.label, CHOICE_COLORS["allow"], "white")
+        return (choice.label, CHOICE_COLORS["allow_always"], guard_dim if guard_active else "white")
+    return (choice.label, CHOICE_COLORS["allow"], guard_dim if guard_active else "white")
 
 
 def _overlay_choice_label(
@@ -260,6 +267,7 @@ def render_permission_request(
     body_fg_color: str = "white",
     grid_cols: int = GRID_COLS,
     grid_rows: int = GRID_ROWS,
+    guard_active: bool = False,
 ) -> dict[int, bytes]:
     """Render button images for a permission request.
 
@@ -316,7 +324,7 @@ def render_permission_request(
             idx = choice_keys.index(key)
             if idx < num_choices:
                 label, bg_color, text_color = _choice_appearance(
-                    request.choices[idx], always_active
+                    request.choices[idx], always_active, guard_active
                 )
                 tile = _overlay_choice_label(tile, label, bg_color, text_color)
 

@@ -25,7 +25,7 @@ class TestDaemonCheckExisting:
 
 
 def _make_ready_daemon():
-    """Create a daemon with mocked device_state."""
+    """Create a daemon with mocked device_state and no guard time."""
     daemon = Daemon()
     daemon.device_state = MagicMock()
     daemon.device_state.status = "ready"
@@ -36,6 +36,9 @@ def _make_ready_daemon():
         "rotation": 90,
     }
     daemon.device_state.get_grid_layout.return_value = (2, 3, 6)
+    # Disable guard time for most tests
+    daemon._display_guard_sec = 0.0
+    daemon._minor_guard_sec = 0.0
     return daemon
 
 
@@ -752,3 +755,126 @@ class TestDaemonUnifiedQueue:
         # Ask restored with preserved state
         assert daemon._current_item is ask_item
         assert ask_item.ask_state.answers.get(0) == "Option A"
+
+
+class TestDisplayGuard:
+    """Tests for display guard time (ignore presses too soon after switch)."""
+
+    def test_press_ignored_during_guard(self, sample_request):
+        """Button press within guard period is ignored for permission."""
+        daemon = _make_ready_daemon()
+        daemon._display_guard_sec = 10.0  # 10 seconds — press will always be too early
+
+        item = _make_item(daemon, sample_request)
+        daemon._add_item(item)
+
+        daemon._key_callback(None, 5, True)
+        assert not item.done_event.is_set()
+
+    def test_press_accepted_after_guard(self, sample_request):
+        """Button press after guard period is accepted."""
+        daemon = _make_ready_daemon()
+        # guard is already 0.0 from _make_ready_daemon
+
+        item = _make_item(daemon, sample_request)
+        daemon._add_item(item)
+
+        daemon._key_callback(None, 5, True)
+        assert item.done_event.is_set()
+        assert item.response.chosen.label == "Allow"
+
+    def test_guard_resets_on_display_switch(self, sample_request):
+        """Guard timer resets when display switches to a different item."""
+        import time
+
+        daemon = _make_ready_daemon()
+        daemon._display_guard_sec = 0.1
+
+        item_a = _make_item(daemon, sample_request, client_pid=1000)
+        item_a.timestamp = time.monotonic()
+        daemon._add_item(item_a)
+
+        # Wait for guard to expire on A
+        threading.Event().wait(0.15)
+        daemon._key_callback(None, 5, True)
+        assert item_a.done_event.is_set()
+
+        # B arrives — guard resets
+        item_b = _make_item(daemon, sample_request, client_pid=2000)
+        item_b.timestamp = time.monotonic()
+        daemon._add_item(item_b)
+
+        # Immediate press should be ignored (guard active)
+        daemon._key_callback(None, 5, True)
+        assert not item_b.done_event.is_set()
+
+        # Wait for guard to expire
+        threading.Event().wait(0.15)
+        daemon._key_callback(None, 5, True)
+        assert item_b.done_event.is_set()
+
+    def test_fallback_uses_minor_guard(self, exit_plan_mode_request):
+        """Fallback uses minor_guard_sec (default 0), not display_guard_sec."""
+        daemon = _make_ready_daemon()
+        daemon._display_guard_sec = 10.0  # High guard for permission
+        daemon._minor_guard_sec = 0.0     # No guard for fallback
+
+        item = _make_item(
+            daemon, exit_plan_mode_request,
+            item_type="fallback", priority=PRIORITY_MEDIUM,
+        )
+        daemon._add_item(item)
+
+        # Should be accepted immediately (minor guard = 0)
+        daemon._key_callback(None, 0, True)
+        assert item.done_event.is_set()
+        assert item.response.status == "fallback"
+
+    def test_notification_uses_minor_guard(self):
+        """Notification uses minor_guard_sec (default 0), not display_guard_sec."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = _make_ready_daemon()
+        daemon._display_guard_sec = 10.0  # High guard for permission
+        daemon._minor_guard_sec = 0.0     # No guard for notification
+
+        msg = NotificationMessage(
+            notification_type="idle_prompt", message="Idle", client_pid=1000,
+        )
+        daemon._handle_notification(msg)
+        assert daemon._current_item is not None
+
+        # Should be accepted immediately
+        daemon._key_callback(None, 5, True)
+        assert daemon._current_item is None
+
+    def test_minor_guard_blocks_when_set(self, exit_plan_mode_request):
+        """Fallback respects minor_guard_sec when > 0."""
+        daemon = _make_ready_daemon()
+        daemon._minor_guard_sec = 10.0  # High minor guard
+
+        item = _make_item(
+            daemon, exit_plan_mode_request,
+            item_type="fallback", priority=PRIORITY_MEDIUM,
+        )
+        daemon._add_item(item)
+
+        daemon._key_callback(None, 0, True)
+        assert not item.done_event.is_set()
+
+    def test_guard_timer_re_renders(self, sample_request):
+        """After guard expires, item is re-rendered with guard_active=False."""
+        daemon = _make_ready_daemon()
+        daemon._display_guard_sec = 0.1
+
+        item = _make_item(daemon, sample_request)
+        daemon._add_item(item)
+
+        # Initial render with guard_active=True
+        assert daemon.device_state.set_key_images.call_count == 1
+
+        # Wait for guard timer to fire
+        threading.Event().wait(0.2)
+
+        # Should have been re-rendered (guard_active=False)
+        assert daemon.device_state.set_key_images.call_count == 2

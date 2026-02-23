@@ -120,6 +120,7 @@ cc-streamdeck-daemon --stop
 - **ホットプラグ**: Stream Deck 未接続でも Daemon は待機し、接続されると自動検知（3秒間隔ポーリング）
 - **フォールバック**: デバイス未接続時やエラー時は通常の端末確認プロンプトにフォールバック
 - **PPID ベースキャンセル**: ターミナルで応答後に次のリクエストが来ると、同じ Claude インスタンスからの古いリクエストを自動キャンセル
+- **表示ガード**: 表示切替直後のボタン押下を無視する猶予時間（PermissionRequest/AskUserQuestion はデフォルト 500ms）。ガード中はラベル文字が暗く表示される
 - **自動終了**: Stream Deck が24時間接続されない場合、Daemon は自動終了
 
 ### AskUserQuestion 対応
@@ -207,6 +208,11 @@ patterns = ['/etc/.*', '.*\.env$']
 # 表示する通知の種類（Notification hook 使用時）
 [notification]
 types = ["idle_prompt", "auth_success", "elicitation_dialog"]  # デフォルト
+
+# 表示切替後のボタン押下ガード時間（ミリ秒）
+[display]
+guard_ms = 500         # PermissionRequest / AskUserQuestion（デフォルト 500）
+minor_guard_ms = 0     # Fallback / Notification（デフォルト 0）
 ```
 
 設定はデーモン起動時に1回読み込み。変更後は `cc-streamdeck-daemon --stop` で停止すれば、次の hook 呼び出し時に自動再起動される。

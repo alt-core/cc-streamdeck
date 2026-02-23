@@ -39,6 +39,11 @@ class UserSettings:
     notification_types: list[str] = field(
         default_factory=lambda: ["idle_prompt", "auth_success", "elicitation_dialog"]
     )
+    # Guard time in ms before accepting button presses after display switch
+    # PermissionRequest / AskUserQuestion (default 500ms)
+    display_guard_ms: int = 500
+    # Fallback / Notification (default 0ms)
+    display_minor_guard_ms: int = 0
 
 
 def load_settings() -> UserSettings:
@@ -121,6 +126,14 @@ def _parse(data: dict) -> UserSettings:
     notif_types = data.get("notification", {}).get("types")
     if isinstance(notif_types, list):
         settings.notification_types = [str(t) for t in notif_types]
+
+    # [display]
+    guard_ms = data.get("display", {}).get("guard_ms")
+    if isinstance(guard_ms, int):
+        settings.display_guard_ms = max(0, guard_ms)
+    minor_guard_ms = data.get("display", {}).get("minor_guard_ms")
+    if isinstance(minor_guard_ms, int):
+        settings.display_minor_guard_ms = max(0, minor_guard_ms)
 
     # [risk.path_*]
     for level, attr in [

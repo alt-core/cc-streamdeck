@@ -175,3 +175,39 @@ class TestParseNotification:
         settings = _parse(data)
         # Defaults preserved when no notification section
         assert len(settings.notification_types) == 3
+
+
+class TestDisplayGuardSettings:
+    def test_default_guard_ms(self):
+        settings = _parse({})
+        assert settings.display_guard_ms == 500
+
+    def test_default_minor_guard_ms(self):
+        settings = _parse({})
+        assert settings.display_minor_guard_ms == 0
+
+    def test_custom_guard_ms(self):
+        data = {"display": {"guard_ms": 300}}
+        settings = _parse(data)
+        assert settings.display_guard_ms == 300
+
+    def test_custom_minor_guard_ms(self):
+        data = {"display": {"minor_guard_ms": 500}}
+        settings = _parse(data)
+        assert settings.display_minor_guard_ms == 500
+
+    def test_negative_guard_ms_clamped(self):
+        data = {"display": {"guard_ms": -100}}
+        settings = _parse(data)
+        assert settings.display_guard_ms == 0
+
+    def test_negative_minor_guard_ms_clamped(self):
+        data = {"display": {"minor_guard_ms": -50}}
+        settings = _parse(data)
+        assert settings.display_minor_guard_ms == 0
+
+    def test_both_guard_settings(self):
+        data = {"display": {"guard_ms": 500, "minor_guard_ms": 200}}
+        settings = _parse(data)
+        assert settings.display_guard_ms == 500
+        assert settings.display_minor_guard_ms == 200
