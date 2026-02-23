@@ -30,7 +30,7 @@ Claude Code へ結果返却
 - `src/cc_streamdeck/risk.py` — リスク評価エンジン。4段階（critical/high/medium/low）、Bashパターンマッチ、パス引き上げ、インスタンスパレット管理
 - `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、AskUserQuestion全面ボタン描画（ラベル+description）、フォールバックメッセージ表示、Notification表示（最下段のみ）。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
 - `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、`get_grid_layout()` でデバイスのグリッドサイズ取得、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
-- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→リスク評価→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル、AskUserQuestion対話UI（`_AskQuestionState`）、フォールバック表示、Notification表示（`_BackgroundDisplay` で退避・復元）、設定読み込み
+- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、統一キュー（`_items`）による表示管理。`_DisplayItem` で全種別を統一、`_select_and_display()` で表示判定。`_add_item`（同一PID上書き）、`_remove_item`（除去+再計算）、`_wait_for_resolution`（per-item `done_event` で接続スレッドがブロック）。`_key_callback` → `_handle_permission_key`/`_handle_ask_key` で種別ごとのボタン処理。`_AskQuestionState` でページ遷移・回答管理。設定読み込み
 - `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。Notification hookはfire-and-forget（応答不要）。エラー時はexit 0でフォールバック
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
@@ -121,33 +121,37 @@ AskUserQuestion は Stream Deck 上で選択肢を直接表示し、ボタン押
 - multiSelect: トグル式（各ボタン ON/OFF 切替、複数選択して Submit）
 - 複数質問: 1ページ目左下=Cancel、2ページ目以降左下=Back。最終質問後に確認ページ（Back + Submit のみ）
 - 空きボタン押下は全ページで無視。背景色はインスタンス識別色
-- `_AskQuestionState`: ページ番号・回答・pending_action を管理
-- `_process_ask_question()`: イベントループで状態変更→再レンダリング→ボタン待ち
+- `_AskQuestionState`: ページ番号・回答管理。`_handle_ask_key()` でボタン操作、`_render_ask_page()` で再レンダリング
 - `render_ask_question_page()`: 全面ボタン表示（`_render_full_button()` でラベル+description自動レイアウト）
 
 ### フォールバック表示
 
-ExitPlanMode など、hook の `allow`/`deny` では適切にハンドリングできないツールは、Stream Deck に「See Claude Code」メッセージと OK ボタンを表示し、任意のボタン押下で dismiss。daemon は `status="fallback"` を返し、hook は exit 0（出力なし）でターミナルプロンプトにフォールバックする。背景色はインスタンス識別色。
+ExitPlanMode など、hook の `allow`/`deny` では適切にハンドリングできないツールは、Stream Deck に「See Claude Code」メッセージと OK ボタンを表示し、任意のボタン押下で dismiss。daemon は `status="fallback"` を返し、hook は exit 0（出力なし）でターミナルプロンプトにフォールバックする。背景色はインスタンス識別色。`render_fallback_message()` でレンダリング。
 
-- `_process_fallback()`: インスタンス背景色計算 + フォールバックメッセージ表示 + ボタン待ち + クライアント切断監視
-- `render_fallback_message()`: ツール名ヘッダ + 「See Claude Code」+ OK ボタンの画像生成（`bg_color` パラメータ）
-- `_key_callback()` でフォールバックツール判定時は全ボタンが dismiss トリガー
+### 統一キュー表示管理 (daemon.py)
 
-### 表示優先度
+全ての表示物（PermissionRequest, AskUserQuestion, Fallback, Notification）を `_items: list[_DisplayItem]` で統一管理。表示すべきアイテムは `_select_and_display()` が `(priority DESC, timestamp DESC)` で決定する。
 
-複数の表示要求を優先度で管理:
+| 優先度 | 種別 | item_type | 応答 |
+|--------|------|-----------|------|
+| HIGH (3) | PermissionRequest, AskUserQuestion | "permission", "ask" | ブロッキング応答 |
+| MEDIUM (2) | Fallback (ExitPlanMode) | "fallback" | fallback 返却 |
+| LOW (1) | Notification | "notification" | 不要（fire-and-forget） |
 
-| 優先度 | 種別 | 表示 | 応答 |
-|--------|------|------|------|
-| HIGH | PermissionRequest, AskUserQuestion | 全画面 | ブロッキング応答 |
-| MEDIUM | Fallback (ExitPlanMode) | See Claude Code + OK | fallback 返却 |
-| LOW | Notification | 最下段のみ（さりげなく） | 不要（fire-and-forget） |
+**`_DisplayItem`**: 全種別を統一するデータクラス。priority, timestamp, client_pid, item_type, request, done_event, response, always_active, ask_state 等を保持。
 
-- **同一 PID**: 常に最新で上書き（PPIDベースキャンセル + stale 検出）
-- **異 PID の LOW 表示中に HIGH/MEDIUM が来た場合**: HIGH/MEDIUM を表示。LOW は `_background_display` に退避
-- **HIGH/MEDIUM 完了後**: `_background_display` があれば復元して表示
-- **同一 PID で HIGH → LOW の場合**: HIGH 完了時に LOW は復元しない（そのインスタンスが次の作業に移ったため）
-- **`_background_lock`**: `_request_lock` とは別のロック。Notification は `_request_lock` を取らない（ブロックさせない）
+**主要メソッド:**
+- `_add_item(item)`: リストに追加。同一PIDの既存アイテムは除去（`done_event` をエラーで起こす）。`_select_and_display()` を呼ぶ
+- `_remove_item(item)`: リストから除去。`_select_and_display()` を呼ぶ
+- `_select_and_display()`: `max(self._items, key=lambda i: (i.priority, i.timestamp))` で最優先アイテムを選択し、表示が変わった場合のみ `_render_item()` を呼ぶ
+- `_wait_for_resolution(item, conn)`: 接続ハンドラスレッドが per-item `done_event` を1秒ポーリングで待機。client 切断検出時は `_remove_item()` で除去
+- `_render_item(item)`: item_type に応じて適切な renderer を呼ぶ
+
+**動作:**
+- **同一PID上書き**: `_add_item` が同一PID既存アイテムを自動除去。superseded アイテムの接続スレッドは `done_event` で起こされ、エラー応答を返す
+- **プリエンプション**: 異PIDの新しいアイテムが来ると `_select_and_display()` が最新を選択。古いアイテムはリストに残り、新しいものが解決されると自動的に再表示される
+- **Notification**: LOW として `_items` に投入。HIGH/MEDIUM 表示中は選択されないだけ。解決後に自然に表示される
+- **`_items_lock`**: 短命ロック（リスト操作と `_current_item` 更新のみ保護）。`_request_lock` のような長期保持なし
 
 ### Notification 表示
 
@@ -156,17 +160,17 @@ Claude Code の Notification hook で受信した通知を最下段に表示。�
 ```
 Mini 3x2:
 [     ] [     ] [     ]     ← 黒
-[ message text            ] ← 最下段（インスタンス背景色、暗い文字色）
+[ message text         OK ] ← 最下段（インスタンス背景色、暗い文字色、右下にOK）
 ```
 
-- `render_notification()`: 最下段を横長キャンバスとして `message` テキストをレンダリング
-- `_handle_notification()`: 設定で有効な `notification_type` か確認、`_background_display` に保存、HIGH/MEDIUM 非表示中なら即座にレンダリング
-- `_BackgroundDisplay`: 退避中の LOW 表示状態（client_pid, message, bg_color, timestamp）
+- `render_notification()`: 最下段を横長キャンバスとしてレンダリング。フォントは16px→10pxの自動選択
+- `_handle_notification()`: `_DisplayItem(priority=LOW)` として `_add_item()` に投入
 - 設定ファイル `[notification] types = [...]` で表示する notification_type を選択可能
+- OK ボタン押下で dismiss（`_remove_item()` → 次のアイテムへ）
 
-### PPIDベースキャンセル
+### PPIDベースの同一インスタンス識別
 
-Claude Code は PermissionRequest hook プロセスをターミナル応答後も kill しない（既知のバグ: GitHub #15433）。そのため、hook が `os.getppid()` を `client_pid` として daemon に送信し、同じ Claude インスタンスから新しいリクエストが来たら、処理中の古いリクエストを自動キャンセルする。
+Claude Code は PermissionRequest hook プロセスをターミナル応答後も kill しない（既知のバグ: GitHub #15433）。hook が `os.getppid()` を `client_pid` として daemon に送信。同じ PID からの新しいリクエストは `_add_item()` の同一PID上書きで古いものを自動除去する。
 
 ### Daemon自動起動とデバイス状態管理
 
@@ -182,9 +186,9 @@ Hook Client はソケット接続失敗時にDaemonを自動起動（lazy init�
 ### スレッドモデル (daemon.py)
 
 - メインスレッド: Unix socketサーバ（accept loop、デバイスポーリングスレッド終了も監視）
-- 接続ハンドラスレッド: Hook Client接続の処理（`_request_lock`で直列化、PPIDベースキャンセル発火）
+- 接続ハンドラスレッド: `_add_item()` → `_wait_for_resolution()` → 応答送信。per-item `done_event` を待つだけでロック長期保持なし。複数スレッドが同時に待機可能
 - デバイスポーリングスレッド: DeviceStateのデーモンスレッド（24時間未接続でself._running=False）
-- StreamDeckライブラリ内部スレッド: `_key_callback` 配信（`with deck:` で排他制御）
+- StreamDeckライブラリ内部スレッド: `_key_callback` → アイテム解決 → `_remove_item()` → `_select_and_display()`
 
 ## Commands
 
@@ -219,6 +223,7 @@ uv run cc-streamdeck-daemon --stop   # Daemon停止
 
 ## Design Principles
 
+- **統一キューによる表示管理**: PermissionRequest、AskUserQuestion、フォールバック、Notification など全ての表示物は同一のリスト（`_items`）に投入する。表示すべきアイテムは常に `(priority DESC, timestamp DESC)` で決定する（優先度が最も高いものの中で、最も新しいもの）。アイテムの追加・解決・除去のたびに `_select_and_display()` を呼び、この単一ロジックで次の表示を再計算する。優先度ごとの分岐、同一PID上書き、プリエンプション、復帰などは全てこのルールの自然な帰結として実現する。種別ごとのアドホックな退避・復元機構を作らないこと
 - Stream Deck Mini 6ボタンを1つの連結ディスプレイとして扱う
 - メッセージ表示領域を最大化、選択肢はボタン下部20pxの色付きラベルのみ
 - フォント幅計算は `getlength()` (advance width) を使用。`getbbox()` はピクセル範囲で等幅が崩れる
@@ -226,10 +231,10 @@ uv run cc-streamdeck-daemon --stop   # Daemon停止
 - Alwaysは安全のためトグル式（誤タップ防止）。非アクティブ時はグレー文字
 - Hook Client は高速起動・応答が必須（Claude Code がブロックされるため）
 - あらゆるエラーで exit 0（出力なし）→ 端末フォールバック（ユーザーがスタックしない）
-- PPIDベースキャンセルでターミナル応答後の古いリクエストを自動クリア
+- 同一PIDからの新しいリクエストは `_add_item()` で古いものを自動上書き（supersede）
 - リスク評価: low は確実にread-onlyな操作のみ。誤判定の余地があるものはmedium以上。未知コマンドはmedium
 - 設定ファイルのユーザーパターンはbuilt-inに加算（上書きではない、安全性のため）
 - AskUserQuestion は Stream Deck 上で直接回答（`updatedInput.answers` で返却）。ExitPlanMode はフォールバック表示でターミナルに誘導
-- Notification は fire-and-forget（応答不要）。最下段のみ控えめに表示。HIGH/MEDIUM 表示中は退避し、完了後に復元
+- Notification は fire-and-forget（応答不要）。LOW アイテムとして統一キューに投入し、最下段のみ控えめに表示
 - 意味のある色（リスクヘッダ、選択肢ラベル等）以外の背景色はインスタンス識別色を使用
 - レイアウトは `deck.key_layout()` から動的計算。Mini以外のモデルでもコード変更なしで動作する設計
