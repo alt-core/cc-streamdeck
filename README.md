@@ -124,6 +124,38 @@ Claude Code が AskUserQuestion ツールで選択肢を提示する際、Stream
 | **medium** (紺) | Write, Edit, WebFetch, 未知コマンド |
 | **low** (暗灰) | `ls`, `cat`, `git status`, `npm test` |
 
+### Notification 表示（オプション）
+
+Claude Code の Notification hook を設定すると、入力待ちなどの状態を Stream Deck 最下段にさりげなく表示できる。権限確認ほど重要ではないが、複数インスタンスの状況を把握したいときに便利。
+
+使いたい場合は `~/.claude/settings.json` に Notification hook を追加:
+
+```json
+{
+  "hooks": {
+    "PermissionRequest": [ ... ],
+    "Notification": [
+      {
+        "matcher": {},
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/cc-streamdeck-hook"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+表示する通知の種類は `~/.config/cc-streamdeck/config.toml` で絞り込める（デフォルトは全種類）:
+
+```toml
+[notification]
+types = ["idle_prompt"]  # idle_prompt のみ表示
+```
+
 ### 設定ファイル
 
 `~/.config/cc-streamdeck/config.toml` で色やリスク評価ルールをカスタマイズ可能（全セクション省略可）:

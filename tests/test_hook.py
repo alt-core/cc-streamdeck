@@ -1,6 +1,13 @@
 """Tests for Hook Client logic."""
 
-from cc_streamdeck.hook import build_ask_question_output, build_hook_output, build_request
+from unittest.mock import patch
+
+from cc_streamdeck.hook import (
+    _send_notification,
+    build_ask_question_output,
+    build_hook_output,
+    build_request,
+)
 from cc_streamdeck.protocol import PermissionChoice
 
 
@@ -117,3 +124,41 @@ class TestBuildAskQuestionOutput:
         answers = {"Q1?": "A", "Q2?": "B"}
         output = build_ask_question_output(hook_input, answers)
         assert output["hookSpecificOutput"]["decision"]["updatedInput"]["answers"] == answers
+
+
+class TestSendNotification:
+    def test_sends_notification_message(self):
+        """_send_notification creates correct NotificationMessage and sends it."""
+        import socket
+
+        hook_input = {
+            "hook_event_name": "Notification",
+            "notification_type": "idle_prompt",
+            "message": "Claude is idle",
+            "title": "Idle",
+        }
+
+        server, client = socket.socketpair()
+        with patch("cc_streamdeck.hook._try_connect", return_value=client):
+            with patch("cc_streamdeck.hook.os.getppid", return_value=99999):
+                _send_notification(hook_input)
+
+        data = b""
+        while True:
+            chunk = server.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        server.close()
+
+        from cc_streamdeck.protocol import decode_notification
+
+        msg = decode_notification(data)
+        assert msg.notification_type == "idle_prompt"
+        assert msg.message == "Claude is idle"
+        assert msg.client_pid == 99999
+
+    def test_no_daemon_silently_returns(self):
+        """When no daemon is running, _send_notification returns without error."""
+        with patch("cc_streamdeck.hook._try_connect", return_value=None):
+            _send_notification({"notification_type": "idle_prompt", "message": "hi"})

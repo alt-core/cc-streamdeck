@@ -500,6 +500,56 @@ class TestRenderAskQuestionPage:
             assert result_with[key] == result_without[key]
 
 
+class TestRenderNotification:
+    """Tests for low-priority notification rendering."""
+
+    MOCK_FORMAT = {
+        "size": (80, 80),
+        "format": "BMP",
+        "flip": (False, True),
+        "rotation": 90,
+    }
+
+    def test_returns_all_keys(self):
+        from cc_streamdeck.renderer import render_notification
+
+        result = render_notification("Claude is idle", self.MOCK_FORMAT)
+        assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
+
+    def test_returns_bytes(self):
+        from cc_streamdeck.renderer import render_notification
+
+        result = render_notification("Claude is idle", self.MOCK_FORMAT)
+        for v in result.values():
+            assert isinstance(v, bytes)
+            assert len(v) > 0
+
+    def test_upper_keys_are_black(self):
+        from cc_streamdeck.renderer import render_notification
+
+        # Upper row (keys 0,1,2) should all be identical black
+        result = render_notification("Test", self.MOCK_FORMAT)
+        assert result[0] == result[1] == result[2]
+
+    def test_custom_grid(self):
+        from cc_streamdeck.renderer import render_notification
+
+        result = render_notification(
+            "Test", self.MOCK_FORMAT, grid_cols=5, grid_rows=3,
+        )
+        assert set(result.keys()) == set(range(15))
+        # Upper 2 rows (keys 0-9) should be black
+        assert result[0] == result[9]
+
+    def test_custom_bg_color(self):
+        from cc_streamdeck.renderer import render_notification
+
+        result1 = render_notification("Test", self.MOCK_FORMAT, bg_color="#0A0A20")
+        result2 = render_notification("Test", self.MOCK_FORMAT, bg_color="#200A0A")
+        # Bottom row should differ with different bg colors
+        assert result1[3] != result2[3]
+
+
 class TestTruncation:
     def test_overflow_text_still_renders(self):
         """Even very long text should render without error."""

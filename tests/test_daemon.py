@@ -511,3 +511,137 @@ class TestDaemonAskQuestion:
         t.join()
 
         assert resp.status == "error"
+
+
+class TestDaemonNotification:
+    """Tests for low-priority notification handling."""
+
+    def _make_ready_daemon(self):
+        daemon = Daemon()
+        daemon.device_state = MagicMock()
+        daemon.device_state.status = "ready"
+        daemon.device_state.get_key_image_format.return_value = {
+            "size": (80, 80),
+            "format": "BMP",
+            "flip": (False, True),
+            "rotation": 90,
+        }
+        daemon.device_state.get_grid_layout.return_value = (2, 3, 6)
+        return daemon
+
+    def test_notification_stored_and_rendered(self):
+        """Notification is stored and rendered when no HIGH request active."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = self._make_ready_daemon()
+        msg = NotificationMessage(
+            notification_type="idle_prompt",
+            message="Claude is idle",
+            client_pid=1000,
+        )
+
+        daemon._handle_notification(msg)
+
+        assert daemon._background_display is not None
+        assert daemon._background_display.message == "Claude is idle"
+        assert daemon._background_display.client_pid == 1000
+        daemon.device_state.set_key_images.assert_called_once()
+
+    def test_notification_not_rendered_when_request_active(self, sample_request):
+        """Notification is stored but NOT rendered when a HIGH request is displaying."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = self._make_ready_daemon()
+        daemon._current_request = sample_request  # Simulate active request
+
+        msg = NotificationMessage(
+            notification_type="idle_prompt",
+            message="Claude is idle",
+            client_pid=2000,
+        )
+
+        daemon._handle_notification(msg)
+
+        assert daemon._background_display is not None
+        daemon.device_state.set_key_images.assert_not_called()
+
+    def test_notification_restored_after_request(self, sample_request):
+        """After HIGH request completes, stored LOW notification is restored."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = self._make_ready_daemon()
+
+        # Store a notification from different PID
+        msg = NotificationMessage(
+            notification_type="idle_prompt",
+            message="Claude is idle",
+            client_pid=2000,
+        )
+        daemon._handle_notification(msg)
+        daemon.device_state.set_key_images.reset_mock()
+
+        # Simulate HIGH request completing (via _restore_background)
+        daemon._current_request = None
+        daemon._restore_background()
+
+        daemon.device_state.set_key_images.assert_called_once()
+
+    def test_same_pid_request_clears_background(self):
+        """A HIGH request from the same PID clears its background notification."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = self._make_ready_daemon()
+        msg = NotificationMessage(
+            notification_type="idle_prompt",
+            message="Idle",
+            client_pid=1000,
+        )
+        daemon._handle_notification(msg)
+        assert daemon._background_display is not None
+
+        # Simulate same PID sending a new request: clear background
+        with daemon._background_lock:
+            if (
+                daemon._background_display is not None
+                and daemon._background_display.client_pid == 1000
+            ):
+                daemon._background_display = None
+
+        assert daemon._background_display is None
+
+    def test_disabled_notification_type_ignored(self):
+        """Notification with a type not in enabled list is ignored."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = self._make_ready_daemon()
+        daemon._settings.notification_types = ["idle_prompt"]
+
+        msg = NotificationMessage(
+            notification_type="auth_success",
+            message="Authenticated",
+            client_pid=1000,
+        )
+
+        daemon._handle_notification(msg)
+
+        assert daemon._background_display is None
+        daemon.device_state.set_key_images.assert_not_called()
+
+    def test_notification_overwrites_previous(self):
+        """Latest notification overwrites the previous one."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = self._make_ready_daemon()
+
+        msg1 = NotificationMessage(
+            notification_type="idle_prompt", message="First", client_pid=1000,
+        )
+        msg2 = NotificationMessage(
+            notification_type="idle_prompt", message="Second", client_pid=2000,
+        )
+
+        daemon._handle_notification(msg1)
+        daemon._handle_notification(msg2)
+
+        assert daemon._background_display.message == "Second"
+        assert daemon._background_display.client_pid == 2000

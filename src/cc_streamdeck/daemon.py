@@ -12,7 +12,9 @@ import time
 from .config import HOOK_TIMEOUT, LOG_PATH, SOCKET_PATH
 from .device import DeviceState
 from .protocol import (
+    NotificationMessage,
     PermissionResponse,
+    decode_notification,
     decode_request,
     encode,
 )
@@ -20,6 +22,7 @@ from .renderer import (
     compute_layout,
     render_ask_question_page,
     render_fallback_message,
+    render_notification,
     render_permission_request,
 )
 from .risk import (
@@ -61,6 +64,9 @@ class Daemon:
         self._current_grid_rows: int = 2
         # AskUserQuestion state
         self._ask_state: _AskQuestionState | None = None
+        # Background display for low-priority notifications
+        self._background_display: _BackgroundDisplay | None = None
+        self._background_lock = threading.Lock()
 
     def start(self) -> None:
         """Main entry point for the daemon."""
@@ -175,6 +181,10 @@ class Daemon:
                 self.shutdown()
                 return
 
+            if msg.get("type") == "notification":
+                self._handle_notification(decode_notification(data))
+                return
+
             request = decode_request(data)
             logger.info(
                 "Processing request for tool: %s (pid=%d)", request.tool_name, request.client_pid
@@ -197,6 +207,14 @@ class Daemon:
             if request.client_pid:
                 self._latest_request_time[request.client_pid] = request_time
 
+            # A new HIGH/MEDIUM request clears background from the same PID
+            with self._background_lock:
+                if (
+                    self._background_display is not None
+                    and self._background_display.client_pid == request.client_pid
+                ):
+                    self._background_display = None
+
             with self._request_lock:
                 # If a newer request from the same PID arrived while we were
                 # waiting for the lock, this request is stale — skip it.
@@ -211,6 +229,8 @@ class Daemon:
                 else:
                     self._cancel_event.clear()
                     response = self._process_request(request, conn)
+                    # After HIGH/MEDIUM completes, restore LOW from a different PID
+                    self._restore_background()
 
             logger.info("Sending response: %s", response.status)
             conn.sendall(encode(response))
@@ -407,9 +427,14 @@ class Daemon:
         self._response_event.clear()
         self._response = None
 
+        # Compute instance background color
+        palette_idx = instance_palette_index(request.client_pid, self._seen_pids)
+        palette = self._risk_config.instance_palette
+        bg_color = palette[palette_idx % len(palette)]
+
         images = render_fallback_message(
             request.tool_name, key_format,
-            grid_cols=grid_cols, grid_rows=grid_rows,
+            bg_color=bg_color, grid_cols=grid_cols, grid_rows=grid_rows,
         )
         self.device_state.set_key_images(images)
 
@@ -451,6 +476,68 @@ class Daemon:
             grid_rows=self._current_grid_rows,
         )
         self.device_state.set_key_images(images)
+
+    # -- Notification / background display --
+
+    def _handle_notification(self, msg: NotificationMessage) -> None:
+        """Handle a low-priority notification (fire-and-forget, no response)."""
+        # Check if notification type is enabled
+        enabled = self._settings.notification_types
+        if enabled and msg.notification_type not in enabled:
+            logger.info("Ignoring notification type: %s", msg.notification_type)
+            return
+
+        # Compute instance background color
+        palette_idx = instance_palette_index(msg.client_pid, self._seen_pids)
+        palette = self._risk_config.instance_palette
+        bg_color = palette[palette_idx % len(palette)]
+
+        bg = _BackgroundDisplay(
+            client_pid=msg.client_pid,
+            notification_type=msg.notification_type,
+            message=msg.message,
+            bg_color=bg_color,
+            timestamp=time.monotonic(),
+        )
+
+        with self._background_lock:
+            self._background_display = bg
+
+        # Only render if no HIGH/MEDIUM request is active
+        if self._current_request is None:
+            self._render_background(bg)
+
+        logger.info(
+            "Notification stored: %s (pid=%d)", msg.notification_type, msg.client_pid
+        )
+
+    def _render_background(self, bg: _BackgroundDisplay) -> None:
+        """Render a background notification on the device."""
+        if self.device_state.status != "ready":
+            return
+        key_format = self.device_state.get_key_image_format()
+        if key_format is None:
+            return
+        grid_info = self.device_state.get_grid_layout()
+        if grid_info is not None:
+            grid_rows, grid_cols, _ = grid_info
+        else:
+            from .config import GRID_COLS, GRID_ROWS
+            grid_cols, grid_rows = GRID_COLS, GRID_ROWS
+
+        images = render_notification(
+            bg.message, key_format,
+            bg_color=bg.bg_color,
+            grid_cols=grid_cols, grid_rows=grid_rows,
+        )
+        self.device_state.set_key_images(images)
+
+    def _restore_background(self) -> None:
+        """Restore background display after a HIGH/MEDIUM request completes."""
+        with self._background_lock:
+            bg = self._background_display
+        if bg is not None:
+            self._render_background(bg)
 
     # -- AskUserQuestion support --
 
@@ -682,6 +769,26 @@ class Daemon:
                 state.answers[state.current_page] = label
             state.pending_action = "select"
             self._response_event.set()
+
+
+class _BackgroundDisplay:
+    """Stored low-priority notification for display restoration."""
+
+    __slots__ = ("client_pid", "notification_type", "message", "bg_color", "timestamp")
+
+    def __init__(
+        self,
+        client_pid: int,
+        notification_type: str,
+        message: str,
+        bg_color: str,
+        timestamp: float,
+    ):
+        self.client_pid = client_pid
+        self.notification_type = notification_type
+        self.message = message
+        self.bg_color = bg_color
+        self.timestamp = timestamp
 
 
 class _AskQuestionState:

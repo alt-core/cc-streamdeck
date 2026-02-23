@@ -328,6 +328,7 @@ def render_permission_request(
 def render_fallback_message(
     tool_name: str,
     key_image_format: dict,
+    bg_color: str = "#1A0A00",
     grid_cols: int = GRID_COLS,
     grid_rows: int = GRID_ROWS,
 ) -> dict[int, bytes]:
@@ -340,7 +341,7 @@ def render_fallback_message(
     vw = grid_cols * key_w
     vh = grid_rows * key_h
 
-    virtual = Image.new("RGB", (vw, vh), "#1A0A00")
+    virtual = Image.new("RGB", (vw, vh), bg_color)
     draw = ImageDraw.Draw(virtual)
 
     header_font = load_font("bold", FONT_SIZE_LARGE)
@@ -535,6 +536,60 @@ def render_ask_question_page(
             # Empty key with instance background
             tile = Image.new("RGB", key_size, bg_color)
         result[key] = pil_to_native(tile, key_image_format)
+
+    return result
+
+
+def render_notification(
+    message: str,
+    key_image_format: dict,
+    bg_color: str = "#0A0A20",
+    grid_cols: int = GRID_COLS,
+    grid_rows: int = GRID_ROWS,
+) -> dict[int, bytes]:
+    """Render a low-priority notification on the bottom row only.
+
+    Upper rows are black (blend with device bezel). Bottom row shows
+    the message text across a wide horizontal canvas with instance bg color.
+    """
+    key_w, key_h = key_image_format["size"]
+    total_keys = grid_cols * grid_rows
+
+    # Bottom row keys
+    bottom_start = (grid_rows - 1) * grid_cols
+
+    # Render bottom row as a single wide canvas
+    canvas_w = grid_cols * key_w
+    canvas = Image.new("RGB", (canvas_w, key_h), bg_color)
+    draw = ImageDraw.Draw(canvas)
+
+    font = load_font("regular", FONT_SIZE_SMALL)
+    text_color = "#606060"
+
+    # Wrap and draw text
+    wrapped = _wrap_text(message, font, canvas_w - 4)
+    max_lines = key_h // FONT_SIZE_SMALL
+    wrapped = wrapped[:max_lines]
+
+    total_height = len(wrapped) * FONT_SIZE_SMALL
+    y = (key_h - total_height) // 2
+    for line in wrapped:
+        draw.text((2, y), line, font=font, fill=text_color)
+        y += FONT_SIZE_SMALL
+
+    # Split canvas into per-key tiles
+    result: dict[int, bytes] = {}
+    black = Image.new("RGB", (key_w, key_h), "#000000")
+    black_bytes = pil_to_native(black, key_image_format)
+
+    for key in range(total_keys):
+        if key < bottom_start:
+            result[key] = black_bytes
+        else:
+            col = key - bottom_start
+            x = col * key_w
+            tile = canvas.crop((x, 0, x + key_w, key_h))
+            result[key] = pil_to_native(tile, key_image_format)
 
     return result
 

@@ -35,6 +35,10 @@ class UserSettings:
     # Path patterns for Write/Edit risk elevation
     path_critical: list[str] = field(default_factory=list)
     path_high: list[str] = field(default_factory=list)
+    # Notification types to display (empty = all enabled)
+    notification_types: list[str] = field(
+        default_factory=lambda: ["idle_prompt", "auth_success", "elicitation_dialog"]
+    )
 
 
 def load_settings() -> UserSettings:
@@ -112,6 +116,11 @@ def _parse(data: dict) -> UserSettings:
                         rule[key] = str(entry[key])
                 if "name" in rule and "pattern" in rule:
                     settings.bash_append.append(rule)
+
+    # [notification]
+    notif_types = data.get("notification", {}).get("types")
+    if isinstance(notif_types, list):
+        settings.notification_types = [str(t) for t in notif_types]
 
     # [risk.path_*]
     for level, attr in [

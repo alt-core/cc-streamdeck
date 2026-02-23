@@ -149,3 +149,29 @@ class TestParseBashRules:
         assert settings.bash_levels == {}
         assert settings.bash_prepend == []
         assert settings.bash_append == []
+
+
+class TestParseNotification:
+    """Test parsing of notification settings."""
+
+    def test_default_notification_types(self):
+        settings = _parse({})
+        assert "idle_prompt" in settings.notification_types
+        assert "auth_success" in settings.notification_types
+        assert "elicitation_dialog" in settings.notification_types
+
+    def test_custom_notification_types(self):
+        data = {"notification": {"types": ["idle_prompt"]}}
+        settings = _parse(data)
+        assert settings.notification_types == ["idle_prompt"]
+
+    def test_empty_notification_types(self):
+        data = {"notification": {"types": []}}
+        settings = _parse(data)
+        assert settings.notification_types == []
+
+    def test_no_notification_section(self):
+        data = {"colors": {"risk": {}}}
+        settings = _parse(data)
+        # Defaults preserved when no notification section
+        assert len(settings.notification_types) == 3

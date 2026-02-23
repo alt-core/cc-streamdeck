@@ -16,6 +16,7 @@ import time
 
 from .config import CONNECT_RETRY_INTERVAL, DAEMON_STARTUP_TIMEOUT, HOOK_TIMEOUT, SOCKET_PATH
 from .protocol import (
+    NotificationMessage,
     PermissionChoice,
     PermissionRequest,
     PermissionResponse,
@@ -181,11 +182,38 @@ def _log(msg: str) -> None:
         pass
 
 
+def _send_notification(hook_input: dict) -> None:
+    """Send a Notification message to the daemon (fire-and-forget)."""
+    msg = NotificationMessage(
+        notification_type=hook_input.get("notification_type", ""),
+        message=hook_input.get("message", ""),
+        title=hook_input.get("title", ""),
+        client_pid=os.getppid(),
+    )
+    _log(f"Sending notification: {msg.notification_type}")
+    sock = _try_connect()
+    if sock is None:
+        _log("No daemon running, skipping notification")
+        return
+    try:
+        sock.sendall(encode(msg))
+        sock.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+
 def main() -> None:
     try:
         raw_input = sys.stdin.read()
         hook_input = json.loads(raw_input)
-        _log(f"Received hook input for tool: {hook_input.get('tool_name', '?')}")
+        _log(f"Received hook input: {hook_input.get('hook_event_name', '?')}/{hook_input.get('tool_name', '?')}")
+
+        # Notification hook: fire-and-forget, no response needed
+        if hook_input.get("hook_event_name") == "Notification":
+            _send_notification(hook_input)
+            sys.exit(0)
 
         request = build_request(hook_input)
 

@@ -1,9 +1,11 @@
 """Tests for IPC protocol encode/decode."""
 
 from cc_streamdeck.protocol import (
+    NotificationMessage,
     PermissionChoice,
     PermissionRequest,
     PermissionResponse,
+    decode_notification,
     decode_request,
     decode_response,
     encode,
@@ -68,3 +70,34 @@ class TestPermissionResponse:
         decoded = decode_response(data)
         assert decoded.chosen.behavior == "deny"
         assert decoded.chosen.message == "Not allowed"
+
+
+class TestNotificationMessage:
+    def test_round_trip(self):
+        msg = NotificationMessage(
+            notification_type="idle_prompt",
+            message="Claude is waiting for input",
+            title="Idle",
+            client_pid=12345,
+        )
+        data = encode(msg)
+        decoded = decode_notification(data)
+        assert decoded.notification_type == "idle_prompt"
+        assert decoded.message == "Claude is waiting for input"
+        assert decoded.title == "Idle"
+        assert decoded.client_pid == 12345
+        assert decoded.type == "notification"
+
+    def test_empty_notification(self):
+        msg = NotificationMessage()
+        data = encode(msg)
+        decoded = decode_notification(data)
+        assert decoded.notification_type == ""
+        assert decoded.message == ""
+        assert decoded.client_pid == 0
+
+    def test_ndjson_format(self):
+        msg = NotificationMessage(notification_type="auth_success", message="OK")
+        data = encode(msg)
+        assert data.endswith(b"\n")
+        assert data.count(b"\n") == 1

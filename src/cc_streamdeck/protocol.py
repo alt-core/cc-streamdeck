@@ -40,7 +40,18 @@ class PermissionResponse:
     type: Literal["permission_response"] = "permission_response"
 
 
-def encode(msg: PermissionRequest | PermissionResponse) -> bytes:
+@dataclass
+class NotificationMessage:
+    """Sent from Hook Client to Daemon for low-priority notifications."""
+
+    notification_type: str = ""  # "idle_prompt", "auth_success", etc.
+    message: str = ""
+    title: str = ""
+    client_pid: int = 0
+    type: Literal["notification"] = "notification"
+
+
+def encode(msg: PermissionRequest | PermissionResponse | NotificationMessage) -> bytes:
     """Serialize a dataclass message to NDJSON bytes."""
     return (json.dumps(asdict(msg), ensure_ascii=False) + "\n").encode("utf-8")
 
@@ -56,6 +67,18 @@ def decode_request(data: bytes) -> PermissionRequest:
         raw_hook_input=obj.get("raw_hook_input", {}),
         client_pid=obj.get("client_pid", 0),
         type=obj.get("type", "permission_request"),
+    )
+
+
+def decode_notification(data: bytes) -> NotificationMessage:
+    """Deserialize NDJSON bytes to a NotificationMessage."""
+    obj = json.loads(data.decode("utf-8").strip())
+    return NotificationMessage(
+        notification_type=obj.get("notification_type", ""),
+        message=obj.get("message", ""),
+        title=obj.get("title", ""),
+        client_pid=obj.get("client_pid", 0),
+        type=obj.get("type", "notification"),
     )
 
 

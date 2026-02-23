@@ -10,14 +10,14 @@ cc_streamdeck は、Claude Code の権限確認プロンプト（Allow/Deny/Alwa
 
 ```
 Claude Code
-  ↓ PermissionRequest Hook (stdin: JSON)
+  ↓ PermissionRequest / Notification Hook (stdin: JSON)
 Hook Client (cc-streamdeck-hook, 短命プロセス)
   ↓ Unix domain socket (/tmp/cc_streamdeck.sock)
 Stream Deck Daemon (cc-streamdeck-daemon, 常駐プロセス)
   ↓ python-elgato-streamdeck
-Stream Deck Mini (6ボタン表示 + ボタン入力)
+Stream Deck (ボタン表示 + ボタン入力)
   ↓ ボタン押下
-Hook Client へ応答返却
+Hook Client へ応答返却 (PermissionRequest のみ)
   ↓ stdout: JSON
 Claude Code へ結果返却
 ```
@@ -25,13 +25,13 @@ Claude Code へ結果返却
 ### ソースコード構成
 
 - `src/cc_streamdeck/config.py` — 共有定数（ソケットパス、タイムアウト、キーサイズ等）
-- `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response）+ NDJSON encode/decode。`client_pid` でClaude インスタンス識別。`ask_answers` でAskUserQuestion回答を伝送
+- `src/cc_streamdeck/protocol.py` — IPCメッセージ型（PermissionRequest/Response/NotificationMessage）+ NDJSON encode/decode。`client_pid` でClaude インスタンス識別。`ask_answers` でAskUserQuestion回答を伝送
 - `src/cc_streamdeck/settings.py` — TOML設定ファイル読み込み（`~/.config/cc-streamdeck/config.toml`、XDG準拠）。tomllib使用
 - `src/cc_streamdeck/risk.py` — リスク評価エンジン。4段階（critical/high/medium/low）、Bashパターンマッチ、パス引き上げ、インスタンスパレット管理
-- `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、AskUserQuestion全面ボタン描画（ラベル+description）、フォールバックメッセージ表示。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
+- `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、AskUserQuestion全面ボタン描画（ラベル+description）、フォールバックメッセージ表示、Notification表示（最下段のみ）。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
 - `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、`get_grid_layout()` でデバイスのグリッドサイズ取得、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
-- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→リスク評価→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル、AskUserQuestion対話UI（`_AskQuestionState`）、フォールバック表示、設定読み込み
-- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。エラー時はexit 0でフォールバック
+- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、リクエスト→リスク評価→レンダリング→ボタン待ち→応答の統合。Alwaysトグル制御、PPIDベースキャンセル、AskUserQuestion対話UI（`_AskQuestionState`）、フォールバック表示、Notification表示（`_BackgroundDisplay` で退避・復元）、設定読み込み
+- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。Notification hookはfire-and-forget（応答不要）。エラー時はexit 0でフォールバック
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
 ### ボタンレイアウト
@@ -79,7 +79,7 @@ Bash: 正規表現パターンマッチ（critical→low→high→medium の優�
 
 ### 設定ファイル
 
-`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターンをカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
+`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別をカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
 
 ### Hook連携: PermissionRequest
 
@@ -127,11 +127,42 @@ AskUserQuestion は Stream Deck 上で選択肢を直接表示し、ボタン押
 
 ### フォールバック表示
 
-ExitPlanMode など、hook の `allow`/`deny` では適切にハンドリングできないツールは、Stream Deck に「See Claude Code」メッセージと OK ボタンを表示し、任意のボタン押下で dismiss。daemon は `status="fallback"` を返し、hook は exit 0（出力なし）でターミナルプロンプトにフォールバックする。
+ExitPlanMode など、hook の `allow`/`deny` では適切にハンドリングできないツールは、Stream Deck に「See Claude Code」メッセージと OK ボタンを表示し、任意のボタン押下で dismiss。daemon は `status="fallback"` を返し、hook は exit 0（出力なし）でターミナルプロンプトにフォールバックする。背景色はインスタンス識別色。
 
-- `_process_fallback()`: フォールバックメッセージ表示 + ボタン待ち + クライアント切断監視
-- `render_fallback_message()`: ツール名ヘッダ + 「See Claude Code」+ OK ボタンの画像生成
+- `_process_fallback()`: インスタンス背景色計算 + フォールバックメッセージ表示 + ボタン待ち + クライアント切断監視
+- `render_fallback_message()`: ツール名ヘッダ + 「See Claude Code」+ OK ボタンの画像生成（`bg_color` パラメータ）
 - `_key_callback()` でフォールバックツール判定時は全ボタンが dismiss トリガー
+
+### 表示優先度
+
+複数の表示要求を優先度で管理:
+
+| 優先度 | 種別 | 表示 | 応答 |
+|--------|------|------|------|
+| HIGH | PermissionRequest, AskUserQuestion | 全画面 | ブロッキング応答 |
+| MEDIUM | Fallback (ExitPlanMode) | See Claude Code + OK | fallback 返却 |
+| LOW | Notification | 最下段のみ（さりげなく） | 不要（fire-and-forget） |
+
+- **同一 PID**: 常に最新で上書き（PPIDベースキャンセル + stale 検出）
+- **異 PID の LOW 表示中に HIGH/MEDIUM が来た場合**: HIGH/MEDIUM を表示。LOW は `_background_display` に退避
+- **HIGH/MEDIUM 完了後**: `_background_display` があれば復元して表示
+- **同一 PID で HIGH → LOW の場合**: HIGH 完了時に LOW は復元しない（そのインスタンスが次の作業に移ったため）
+- **`_background_lock`**: `_request_lock` とは別のロック。Notification は `_request_lock` を取らない（ブロックさせない）
+
+### Notification 表示
+
+Claude Code の Notification hook で受信した通知を最下段に表示。上段は黒（デバイスのベゼルと一体化）:
+
+```
+Mini 3x2:
+[     ] [     ] [     ]     ← 黒
+[ message text            ] ← 最下段（インスタンス背景色、暗い文字色）
+```
+
+- `render_notification()`: 最下段を横長キャンバスとして `message` テキストをレンダリング
+- `_handle_notification()`: 設定で有効な `notification_type` か確認、`_background_display` に保存、HIGH/MEDIUM 非表示中なら即座にレンダリング
+- `_BackgroundDisplay`: 退避中の LOW 表示状態（client_pid, message, bg_color, timestamp）
+- 設定ファイル `[notification] types = [...]` で表示する notification_type を選択可能
 
 ### PPIDベースキャンセル
 
@@ -199,4 +230,6 @@ uv run cc-streamdeck-daemon --stop   # Daemon停止
 - リスク評価: low は確実にread-onlyな操作のみ。誤判定の余地があるものはmedium以上。未知コマンドはmedium
 - 設定ファイルのユーザーパターンはbuilt-inに加算（上書きではない、安全性のため）
 - AskUserQuestion は Stream Deck 上で直接回答（`updatedInput.answers` で返却）。ExitPlanMode はフォールバック表示でターミナルに誘導
+- Notification は fire-and-forget（応答不要）。最下段のみ控えめに表示。HIGH/MEDIUM 表示中は退避し、完了後に復元
+- 意味のある色（リスクヘッダ、選択肢ラベル等）以外の背景色はインスタンス識別色を使用
 - レイアウトは `deck.key_layout()` から動的計算。Mini以外のモデルでもコード変更なしで動作する設計
