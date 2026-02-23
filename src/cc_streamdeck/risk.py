@@ -27,6 +27,11 @@ DEFAULT_INSTANCE_PALETTE: list[str] = [
     "#200A0A",  # dark maroon
     "#1A1A0A",  # dark khaki
     "#150A20",  # dark purple
+    "#0A1A1A",  # dark teal
+    "#1A0A0A",  # dark red
+    "#0A1020",  # dark steel blue
+    "#1A100A",  # dark brown
+    "#0A0A10",  # dark midnight
 ]
 
 # Default body text color
