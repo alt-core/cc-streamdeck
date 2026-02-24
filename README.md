@@ -171,6 +171,36 @@ Claude Code の Notification hook を設定すると、入力待ちなどの状�
 types = ["idle_prompt"]  # idle_prompt のみ表示
 ```
 
+### Deny 後・通知 dismiss 後のウィンドウ フォーカス（オプション）
+
+Deny ボタン押下後や Notification の OK 押下後に、Claude Code のターミナルや Claude Desktop を自動的にアクティブにできる。設定しない場合（デフォルト）は何もしない。
+
+```toml
+[focus]
+# on_deny と on_notification に実行するシェルコマンドを指定。
+# 省略した場合・空文字の場合は何もしない。
+#
+# "auto" を指定すると macOS 限定で自動検出:
+#   client_pid（Claude Code のプロセス）の親プロセス（ターミナル）を
+#   ps + osascript で取得してフォアグラウンドに移動。
+#   他の OS では何もしない。
+on_deny         = "auto"
+on_notification = "auto"
+
+# アプリを直接指定する場合の例:
+# on_deny = "osascript -e 'tell application \"iTerm2\" to activate'"
+# on_deny = "osascript -e 'tell application \"Terminal\" to activate'"
+# on_deny = "osascript -e 'tell application \"Ghostty\" to activate'"
+# on_deny = "open -a Claude"   # Claude Desktop をフォーカス（macOS）
+# on_deny = "wmctrl -a claude" # Linux (X11, wmctrl 要インストール)
+```
+
+| 値 | 動作 |
+|---|---|
+| `""` (省略) | 何もしない |
+| `"auto"` | macOS: `ps` + `osascript` でターミナルを自動アクティブ。他 OS は no-op |
+| その他の文字列 | `shell=True` でシェルコマンドとして実行 |
+
 ### 設定ファイル
 
 `~/.config/cc-streamdeck/config.toml` で色やリスク評価ルールをカスタマイズ可能（全セクション省略可）:
@@ -214,6 +244,14 @@ types = ["idle_prompt", "auth_success", "elicitation_dialog"]  # デフォルト
 guard_ms = 500         # PermissionRequest / AskUserQuestion（デフォルト 500）
 minor_guard_ms = 0     # Fallback / Notification（デフォルト 0）
 guard_dim = false      # ガード中にラベル文字を暗くする（デフォルト false）
+
+# Deny 押下・通知 dismiss 時のウィンドウ フォーカス
+[focus]
+# on_deny          = "auto"    # macOS: ps + osascript でターミナルを自動アクティブ
+# on_notification  = "auto"
+# on_deny = "osascript -e 'tell application \"iTerm2\" to activate'"
+# on_deny = "osascript -e 'tell application \"Terminal\" to activate'"
+# on_deny = "open -a Claude"   # Claude Desktop をフォーカス
 ```
 
 設定はデーモン起動時に1回読み込み。変更後は `cc-streamdeck-daemon --stop` で停止すれば、次の hook 呼び出し時に自動再起動される。
