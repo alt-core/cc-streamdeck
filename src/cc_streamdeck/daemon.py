@@ -555,7 +555,7 @@ class Daemon:
             controls = {"back": "Back", "submit": "Submit"}
             return render_ask_question_page(
                 options=[], selected=set(), control_buttons=controls,
-                key_image_format=key_format, page_info="Confirm",
+                key_image_format=key_format,
                 bg_color=item.bg_color,
                 grid_cols=grid_cols, grid_rows=grid_rows,
             )
@@ -582,11 +582,15 @@ class Daemon:
             controls = {"back": "Back", "next": "Next"}
 
         header = q.get("header", "")
+        if is_multi_page:
+            page_info = f"{header}\n{state.current_page + 1}/{state.total_pages}"
+        else:
+            page_info = header
         page_description = q.get("question", "")
 
         return render_ask_question_page(
             options=options, selected=selected, control_buttons=controls,
-            key_image_format=key_format, page_info=header,
+            key_image_format=key_format, page_info=page_info,
             page_description=page_description,
             bg_color=item.bg_color, descriptions=descriptions,
             grid_cols=grid_cols, grid_rows=grid_rows,

@@ -477,9 +477,10 @@ def render_ask_question_page(
         selected: Set of currently selected option labels (highlighted).
         control_buttons: Key role → label mapping. Roles: "submit", "cancel", "back", "next".
         key_image_format: Stream Deck key format dict.
-        page_info: Optional header text (e.g. "Deploy" or "Deploy\\n1/3") shown on the
-            empty key immediately left of Submit/Next. Not shown if no empty key is available.
-        page_description: Optional question text shown below page_info as description.
+        page_info: Optional header text (e.g. "Deploy" or "Deploy\\n1/3") shown in the
+            body area of cancel/back control buttons.
+        page_description: Optional question text shown in the body area of submit/next
+            control buttons.
         bg_color: Background color for empty keys (instance color).
         descriptions: Optional list of description strings, parallel to options.
         grid_cols: Number of columns.
@@ -496,16 +497,16 @@ def render_ask_question_page(
     submit_key = total_keys - 1  # bottom-right
     cancel_key = total_keys - grid_cols  # bottom-left
 
-    # Determine which keys are control buttons
-    control_key_map: dict[int, tuple[str, str, str]] = {}  # key → (label, bg, fg)
+    # Determine which keys are control buttons: key → (label, bg, fg, role)
+    control_key_map: dict[int, tuple[str, str, str, str]] = {}
     if "submit" in control_buttons:
-        control_key_map[submit_key] = (control_buttons["submit"], ASK_SUBMIT_BG, ASK_CONTROL_FG)
+        control_key_map[submit_key] = (control_buttons["submit"], ASK_SUBMIT_BG, ASK_CONTROL_FG, "submit")
     if "next" in control_buttons:
-        control_key_map[submit_key] = (control_buttons["next"], ASK_NAV_BG, ASK_CONTROL_FG)
+        control_key_map[submit_key] = (control_buttons["next"], ASK_NAV_BG, ASK_CONTROL_FG, "next")
     if "cancel" in control_buttons:
-        control_key_map[cancel_key] = (control_buttons["cancel"], ASK_CANCEL_BG, ASK_CONTROL_FG)
+        control_key_map[cancel_key] = (control_buttons["cancel"], ASK_CANCEL_BG, ASK_CONTROL_FG, "cancel")
     if "back" in control_buttons:
-        control_key_map[cancel_key] = (control_buttons["back"], ASK_NAV_BG, ASK_CONTROL_FG)
+        control_key_map[cancel_key] = (control_buttons["back"], ASK_NAV_BG, ASK_CONTROL_FG, "back")
 
     # Assign options to remaining keys (left-to-right, top-to-bottom)
     option_keys: list[int] = []
@@ -513,19 +514,23 @@ def render_ask_question_page(
         if key not in control_key_map and len(option_keys) < len(options):
             option_keys.append(key)
 
-    # Page info key: the empty key immediately left of Submit/Next (submit_key - 1),
-    # only if that key is not used by options or controls
-    page_info_key = -1
-    if page_info:
-        candidate = submit_key - 1
-        if candidate not in control_key_map and candidate not in option_keys:
-            page_info_key = candidate
+    body_h = key_h - CHOICE_LABEL_HEIGHT
+    body_size = (key_w, body_h)
 
     result: dict[int, bytes] = {}
     for key in range(total_keys):
         if key in control_key_map:
-            label, bg, fg = control_key_map[key]
-            tile = _render_full_button(key_size, label, bg, fg)
+            label, ctrl_bg, ctrl_fg, role = control_key_map[key]
+            # Body area: page_info on cancel/back, page_description on submit/next
+            if role in ("cancel", "back") and page_info:
+                body = _render_full_button(body_size, page_info, bg_color, "#808080")
+            elif role in ("submit", "next") and page_description:
+                body = _render_full_button(body_size, page_description, bg_color, "#606060")
+            else:
+                body = Image.new("RGB", body_size, bg_color)
+            tile = Image.new("RGB", key_size, bg_color)
+            tile.paste(body, (0, 0))
+            tile = _overlay_choice_label(tile, label, ctrl_bg, ctrl_fg)
         elif key in option_keys:
             idx = option_keys.index(key)
             label = options[idx]
@@ -534,12 +539,6 @@ def render_ask_question_page(
             fg = ASK_OPTION_SELECTED_FG if is_selected else ASK_OPTION_FG
             desc = descriptions[idx] if descriptions and idx < len(descriptions) else ""
             tile = _render_full_button(key_size, label, bg, fg, description=desc)
-        elif key == page_info_key:
-            # Question header / page indicator on the key just left of Submit/Next
-            tile = _render_full_button(
-                key_size, page_info, bg_color, "#606060",
-                description=page_description, desc_color="#404040",
-            )
         else:
             # Empty key with instance background
             tile = Image.new("RGB", key_size, bg_color)

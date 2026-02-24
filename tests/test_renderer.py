@@ -417,9 +417,8 @@ class TestRenderAskQuestionPage:
         result = render_ask_question_page(
             options=[],
             selected=set(),
-            control_buttons={"back": "Back", "cancel": "Cancel", "submit": "Submit"},
+            control_buttons={"back": "Back", "submit": "Submit"},
             key_image_format=self.MOCK_FORMAT,
-            page_info="Confirm",
         )
         assert set(result.keys()) == {0, 1, 2, 3, 4, 5}
 
@@ -452,11 +451,11 @@ class TestRenderAskQuestionPage:
         for v in result.values():
             assert isinstance(v, bytes)
 
-    def test_page_info_only_on_submit_adjacent(self):
-        """page_info appears only on key submit_key-1, not on all empty keys."""
+    def test_page_info_on_cancel_key(self):
+        """page_info is rendered in the body area of the cancel/back control key."""
         from cc_streamdeck.renderer import render_ask_question_page
 
-        # 2 options on 3x2: keys 0,1=options, 2=empty, 3=cancel, 4=empty(page_info), 5=submit
+        # 3x2: key 3=cancel, key 5=next
         result_with = render_ask_question_page(
             options=["A", "B"],
             selected=set(),
@@ -471,16 +470,37 @@ class TestRenderAskQuestionPage:
             key_image_format=self.MOCK_FORMAT,
             page_info="",
         )
-        # Key 4 (submit-1) should differ (has page info text)
-        assert result_with[4] != result_without[4]
-        # Key 2 (other empty key) should be same (no page info)
+        # Cancel key (3) should differ (has page_info in body)
+        assert result_with[3] != result_without[3]
+        # Empty key (2) should be same
         assert result_with[2] == result_without[2]
 
-    def test_page_info_not_shown_when_no_space(self):
-        """page_info is not shown when 4 options fill all non-control slots."""
+    def test_page_description_on_submit_key(self):
+        """page_description is rendered in the body area of the submit/next control key."""
         from cc_streamdeck.renderer import render_ask_question_page
 
-        # 4 options on 3x2: keys 0,1,2,4=options, 3=cancel, 5=submit — no empty key
+        result_with = render_ask_question_page(
+            options=["A", "B"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "submit": "Submit"},
+            key_image_format=self.MOCK_FORMAT,
+            page_description="Which option?",
+        )
+        result_without = render_ask_question_page(
+            options=["A", "B"],
+            selected=set(),
+            control_buttons={"cancel": "Cancel", "submit": "Submit"},
+            key_image_format=self.MOCK_FORMAT,
+            page_description="",
+        )
+        # Submit key (5) should differ (has page_description in body)
+        assert result_with[5] != result_without[5]
+
+    def test_page_info_shown_even_with_full_options(self):
+        """page_info on control keys works regardless of option count."""
+        from cc_streamdeck.renderer import render_ask_question_page
+
+        # 4 options on 3x2: keys 0,1,2,4=options, 3=cancel, 5=next
         result_with = render_ask_question_page(
             options=["A", "B", "C", "D"],
             selected=set(),
@@ -495,9 +515,8 @@ class TestRenderAskQuestionPage:
             key_image_format=self.MOCK_FORMAT,
             page_info="",
         )
-        # All keys should be identical (no place to show page_info)
-        for key in range(6):
-            assert result_with[key] == result_without[key]
+        # Cancel key (3) should differ — page_info always fits on control key body
+        assert result_with[3] != result_without[3]
 
 
 class TestRenderNotification:

@@ -123,18 +123,21 @@ AskUserQuestion は Stream Deck 上で選択肢を直接表示し、ボタン押
 
 ```
 単一質問 (3選択肢, Mini):   複数質問 (2ページ目):     確認ページ:
-[Opt A ] [Opt B ] [Opt C ]  [Opt X ] [Opt Y ] [info ]  [     ] [     ] [     ]
+[Opt A ] [Opt B ] [Opt C ]  [Opt X ] [Opt Y ] [     ]  [     ] [     ] [     ]
 [Cancel] [     ] [Submit]   [Back  ] [     ] [Next ]   [Back ] [     ] [Submit]
+ ↑header         ↑question   ↑hdr+pg           ↑question ↑(empty)        ↑(empty)
 ```
 
 - 選択肢ボタン: 左上から順に1ボタン1選択肢、最大 `ボタン数 - 2` 個。ラベル（太字）+ description（小文字グレー）を表示。選択済みは強調色
-- 情報ボタン: Submit/Next の1つ左の空きキーに質問の `header` と `question` テキストを表示。空きがなければ非表示
-- 操作ボタン: Submit=右下(緑), Cancel=左下(赤)。複数質問時は Back/Next でページ遷移
+- 操作ボタン: PermissionRequest と同じ「下部20pxにラベルオーバーレイ」方式。上部本体領域にコンテキスト情報を表示:
+  - Cancel/Back キー本体: `page_info`（header + ページ番号、例: "Language\n1/3"）を `#808080` で描画。単一質問時はページ番号なし
+  - Submit/Next キー本体: `page_description`（question テキスト）を `#606060` で描画
+  - Submit=右下(緑ラベル), Cancel=左下(赤ラベル)。複数質問時は Back/Next(グレーラベル) でページ遷移
 - multiSelect: トグル式（各ボタン ON/OFF 切替、複数選択して Submit）
 - 複数質問: 1ページ目左下=Cancel、2ページ目以降左下=Back。最終質問後に確認ページ（Back + Submit のみ）
 - 空きボタン押下は全ページで無視。背景色はインスタンス識別色
 - `_AskQuestionState`: ページ番号・回答管理。`_handle_ask_key()` でボタン操作、`_render_ask_page()` で再レンダリング
-- `render_ask_question_page()`: 全面ボタン表示（`_render_full_button()` でラベル+description自動レイアウト）
+- `render_ask_question_page()`: 選択肢は全面ボタン、操作ボタンは本体+オーバーレイラベル
 
 ### フォールバック表示
 
