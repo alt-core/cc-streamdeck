@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -151,6 +152,8 @@ class Daemon:
         self._display_time: float = 0.0  # monotonic timestamp of last display switch
         self._guard_dim = self._settings.display_guard_dim
         self._guard_timer: threading.Timer | None = None
+        self._focus_on_deny = self._settings.focus_on_deny
+        self._focus_on_notification = self._settings.focus_on_notification
 
     def start(self) -> None:
         """Main entry point for the daemon."""
@@ -494,6 +497,68 @@ class Daemon:
             return self._minor_guard_sec
         return self._display_guard_sec
 
+    def _run_focus_command(self, cmd: str, client_pid: int = 0) -> None:
+        """Run a focus/activation command asynchronously.
+
+        If cmd is "auto", attempt to activate the terminal that owns the
+        Claude Code process (macOS only, via osascript).
+        Any other non-empty string is executed as a shell command.
+        """
+        if not cmd:
+            return
+        if cmd == "auto":
+            self._focus_auto(client_pid)
+            return
+        try:
+            subprocess.Popen(
+                cmd,
+                shell=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as e:
+            logger.debug("Focus command failed: %s", e)
+
+    def _focus_auto(self, client_pid: int) -> None:
+        """macOS: activate the terminal window running Claude Code.
+
+        Uses the client_pid (Claude Code's PID) to find its parent process
+        (the terminal/shell) and brings it to the foreground via osascript.
+        Falls back silently on other platforms or on any error.
+        """
+        import platform
+        if platform.system() != "Darwin":
+            return
+        if not client_pid:
+            return
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "ppid=", "-p", str(client_pid)],
+                capture_output=True, text=True, timeout=2,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                logger.debug("auto-focus: ps returned no ppid for %d", client_pid)
+                return
+            ppid = int(result.stdout.strip())
+        except Exception as e:
+            logger.debug("auto-focus: could not get ppid for %d: %s", client_pid, e)
+            return
+        script = (
+            f"tell application \"System Events\" "
+            f"to set frontmost of first process whose unix id is {ppid} to true"
+        )
+        try:
+            subprocess.Popen(
+                ["osascript", "-e", script],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.debug("auto-focus: osascript failed: %s", e)
+
     # -- Rendering --
 
     def _get_grid(self) -> tuple[int, int]:
@@ -616,6 +681,7 @@ class Daemon:
 
         if item.item_type == "notification":
             self._remove_item(item)
+            self._run_focus_command(self._focus_on_notification, item.client_pid)
             return
 
         if item.item_type == "fallback":
@@ -667,6 +733,9 @@ class Daemon:
         if item.done_event is not None:
             item.done_event.set()
         self._remove_item(item)
+
+        if chosen.behavior == "deny":
+            self._run_focus_command(self._focus_on_deny, item.client_pid)
 
     def _handle_ask_key(self, item: _DisplayItem, key: int) -> None:
         """Handle a button press during AskUserQuestion."""

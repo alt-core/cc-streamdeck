@@ -46,6 +46,10 @@ class UserSettings:
     display_minor_guard_ms: int = 0
     # Dim choice labels during guard period (visual feedback)
     display_guard_dim: bool = False
+    # Shell command to run when Deny is pressed. "auto" = macOS terminal auto-focus.
+    focus_on_deny: str = ""
+    # Shell command to run when a Notification is dismissed. "auto" = macOS terminal auto-focus.
+    focus_on_notification: str = ""
 
 
 def load_settings() -> UserSettings:
@@ -139,6 +143,14 @@ def _parse(data: dict) -> UserSettings:
     guard_dim = data.get("display", {}).get("guard_dim")
     if isinstance(guard_dim, bool):
         settings.display_guard_dim = guard_dim
+
+    # [focus]
+    focus_on_deny = data.get("focus", {}).get("on_deny", "")
+    if isinstance(focus_on_deny, str):
+        settings.focus_on_deny = focus_on_deny
+    focus_on_notification = data.get("focus", {}).get("on_notification", "")
+    if isinstance(focus_on_notification, str):
+        settings.focus_on_notification = focus_on_notification
 
     # [risk.path_*]
     for level, attr in [

@@ -894,3 +894,111 @@ class TestDisplayGuard:
 
         # Should have been re-rendered (guard_active=False)
         assert daemon.device_state.set_key_images.call_count == 2
+
+
+class TestFocusCommand:
+    """Tests for _run_focus_command and focus-on-deny / focus-on-notification."""
+
+    def test_empty_command_no_subprocess(self, sample_request):
+        """Empty focus command should not launch any process."""
+        daemon = _make_ready_daemon()
+        daemon._focus_on_deny = ""
+        with patch("cc_streamdeck.daemon.subprocess.Popen") as mock_popen:
+            daemon._run_focus_command("", client_pid=1234)
+            mock_popen.assert_not_called()
+
+    def test_shell_command_launched(self, sample_request):
+        """Non-empty, non-auto command is passed to subprocess.Popen with shell=True."""
+        daemon = _make_ready_daemon()
+        with patch("cc_streamdeck.daemon.subprocess.Popen") as mock_popen:
+            daemon._run_focus_command("echo hello", client_pid=1234)
+            mock_popen.assert_called_once()
+            args, kwargs = mock_popen.call_args
+            assert args[0] == "echo hello"
+            assert kwargs.get("shell") is True
+
+    def test_deny_triggers_focus_command(self, sample_request):
+        """Pressing Deny fires the configured focus_on_deny command."""
+        daemon = _make_ready_daemon()
+        daemon._focus_on_deny = "echo deny"
+
+        item = _make_item(daemon, sample_request)
+        daemon._items.append(item)
+        daemon._current_item = item
+
+        with patch.object(daemon, "_run_focus_command") as mock_focus:
+            daemon._key_callback(None, 3, True)  # Deny key
+            mock_focus.assert_called_once_with("echo deny", item.client_pid)
+
+    def test_allow_does_not_trigger_focus(self, sample_request):
+        """Pressing Allow does NOT fire the focus_on_deny command."""
+        daemon = _make_ready_daemon()
+        daemon._focus_on_deny = "echo deny"
+
+        item = _make_item(daemon, sample_request)
+        daemon._items.append(item)
+        daemon._current_item = item
+
+        with patch.object(daemon, "_run_focus_command") as mock_focus:
+            daemon._key_callback(None, 5, True)  # Allow key
+            mock_focus.assert_not_called()
+
+    def test_notification_dismiss_triggers_focus(self):
+        """Dismissing a notification fires the configured focus_on_notification command."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = _make_ready_daemon()
+        daemon._focus_on_notification = "echo notif"
+
+        msg = NotificationMessage(
+            notification_type="idle_prompt", message="Idle", client_pid=1000,
+        )
+        daemon._handle_notification(msg)
+
+        with patch.object(daemon, "_run_focus_command") as mock_focus:
+            daemon._key_callback(None, 5, True)
+            mock_focus.assert_called_once_with("echo notif", 1000)
+
+    def test_auto_skipped_on_non_darwin(self):
+        """'auto' mode is a no-op on non-macOS platforms."""
+        daemon = _make_ready_daemon()
+        with patch("cc_streamdeck.daemon.subprocess.Popen") as mock_popen:
+            with patch("cc_streamdeck.daemon.subprocess.run") as mock_run:
+                with patch("platform.system", return_value="Linux"):
+                    daemon._run_focus_command("auto", client_pid=1234)
+                    mock_popen.assert_not_called()
+                    mock_run.assert_not_called()
+
+    def test_auto_zero_pid_skipped(self):
+        """'auto' mode skips when client_pid is 0."""
+        daemon = _make_ready_daemon()
+        with patch("cc_streamdeck.daemon.subprocess.Popen") as mock_popen:
+            with patch("platform.system", return_value="Darwin"):
+                daemon._run_focus_command("auto", client_pid=0)
+                mock_popen.assert_not_called()
+
+    def test_auto_darwin_launches_osascript(self):
+        """'auto' mode on macOS queries ps and launches osascript."""
+        daemon = _make_ready_daemon()
+
+        ps_result = MagicMock()
+        ps_result.stdout = "5678\n"
+        ps_result.returncode = 0
+
+        with patch("platform.system", return_value="Darwin"):
+            with patch("cc_streamdeck.daemon.subprocess.run", return_value=ps_result) as mock_run:
+                with patch("cc_streamdeck.daemon.subprocess.Popen") as mock_popen:
+                    daemon._run_focus_command("auto", client_pid=1234)
+
+                    # ps called to get ppid
+                    mock_run.assert_called_once()
+                    run_args = mock_run.call_args[0][0]
+                    assert "ps" in run_args
+                    assert str(1234) in [str(a) for a in run_args]
+
+                    # osascript called with ppid
+                    mock_popen.assert_called_once()
+                    popen_cmd = mock_popen.call_args[0][0]
+                    assert popen_cmd[0] == "osascript"
+                    # The script argument should contain the ppid
+                    assert any("5678" in str(arg) for arg in popen_cmd)

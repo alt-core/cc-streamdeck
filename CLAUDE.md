@@ -30,7 +30,7 @@ Claude Code へ結果返却
 - `src/cc_streamdeck/risk.py` — リスク評価エンジン。4段階（critical/high/medium/low）、Bashパターンマッチ、パス引き上げ、インスタンスパレット管理
 - `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、AskUserQuestion全面ボタン描画（ラベル+description）、フォールバックメッセージ表示、Notification表示（最下段のみ）。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
 - `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、`get_grid_layout()` でデバイスのグリッドサイズ取得、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
-- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、統一キュー（`_items`）による表示管理。`_DisplayItem` で全種別を統一、`_select_and_display()` で表示判定。`_add_item`（同一PID上書き）、`_remove_item`（除去+再計算）、`_wait_for_resolution`（per-item `done_event` で接続スレッドがブロック）。`_key_callback` → `_handle_permission_key`/`_handle_ask_key` で種別ごとのボタン処理。`_AskQuestionState` でページ遷移・回答管理。設定読み込み
+- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、統一キュー（`_items`）による表示管理。`_DisplayItem` で全種別を統一、`_select_and_display()` で表示判定。`_add_item`（同一PID上書き）、`_remove_item`（除去+再計算）、`_wait_for_resolution`（per-item `done_event` で接続スレッドがブロック）。`_key_callback` → `_handle_permission_key`/`_handle_ask_key` で種別ごとのボタン処理。`_AskQuestionState` でページ遷移・回答管理。`_run_focus_command` / `_focus_auto` でDeny後/通知dismiss後のウィンドウ フォーカス。設定読み込み
 - `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。Notification hookはfire-and-forget（応答不要）。エラー時はexit 0でフォールバック
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
@@ -60,6 +60,21 @@ Claude Code へ結果返却
 - ガード期間中はボタン押下を無視
 - `display.guard_dim = true` を設定すると、PermissionRequest のガード期間中に選択肢ラベルの文字色を暗くして視覚的に操作不可を示す。ガード終了後に `_guard_timer` で再レンダリングして通常色に復帰（デフォルトOFF）
 - `_guard_for_item(item)`: アイテム種別に応じて適切なガード秒数を返す
+
+### Deny後・通知dismiss後のウィンドウ フォーカス
+
+Deny 押下または Notification dismiss 後に Claude Code のターミナル/Claude Desktop をアクティブにする機能。`_run_focus_command(cmd, client_pid)` が中心ロジック:
+
+| 設定値 | 動作 |
+|--------|------|
+| `""` (デフォルト・省略) | 何もしない |
+| `"auto"` | macOS限定: `ps -o ppid= -p {client_pid}` → `osascript` でターミナルをフォアグラウンドに。他OSは no-op |
+| その他の文字列 | `subprocess.Popen(cmd, shell=True)` で非同期実行 |
+
+- `_focus_auto(client_pid)`: `client_pid`（Claude CodeのPID）の親プロセス（ターミナル/シェル）を取得し `osascript` で `frontmost = true`。`platform.system() != "Darwin"` または `client_pid == 0` のときは即リターン
+- `_handle_permission_key` で Deny 選択後に `_run_focus_command(self._focus_on_deny, item.client_pid)` を呼ぶ
+- `_key_callback` の notification 分岐で `_remove_item()` 後に `_run_focus_command(self._focus_on_notification, item.client_pid)` を呼ぶ
+- 設定キー: `[focus] on_deny` / `[focus] on_notification`
 
 ### フォントフォールバック
 
@@ -91,7 +106,7 @@ Bash: 正規表現パターンマッチ（critical→low→high→medium の優�
 
 ### 設定ファイル
 
-`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別、表示ガード時間をカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
+`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別、表示ガード時間、Deny後/通知dismiss後のウィンドウ フォーカスコマンドをカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
 
 ### Hook連携: PermissionRequest
 

@@ -220,3 +220,32 @@ class TestDisplayGuardSettings:
         data = {"display": {"guard_dim": True}}
         settings = _parse(data)
         assert settings.display_guard_dim is True
+
+
+class TestParseFocus:
+    def test_defaults_empty(self):
+        settings = _parse({})
+        assert settings.focus_on_deny == ""
+        assert settings.focus_on_notification == ""
+
+    def test_on_deny_command(self):
+        data = {"focus": {"on_deny": "osascript -e 'tell application \"iTerm2\" to activate'"}}
+        settings = _parse(data)
+        assert "iTerm2" in settings.focus_on_deny
+
+    def test_on_notification_command(self):
+        data = {"focus": {"on_notification": "open -a Terminal"}}
+        settings = _parse(data)
+        assert settings.focus_on_notification == "open -a Terminal"
+
+    def test_auto_value(self):
+        data = {"focus": {"on_deny": "auto", "on_notification": "auto"}}
+        settings = _parse(data)
+        assert settings.focus_on_deny == "auto"
+        assert settings.focus_on_notification == "auto"
+
+    def test_non_string_ignored(self):
+        data = {"focus": {"on_deny": 42, "on_notification": None}}
+        settings = _parse(data)
+        assert settings.focus_on_deny == ""
+        assert settings.focus_on_notification == ""
