@@ -31,7 +31,8 @@ Claude Code へ結果返却
 - `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、AskUserQuestion全面ボタン描画（ラベル+description）、フォールバックメッセージ表示、Notification表示（最下段のみ）。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
 - `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、`get_grid_layout()` でデバイスのグリッドサイズ取得、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
 - `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、統一キュー（`_items`）による表示管理。`_DisplayItem` で全種別を統一、`_select_and_display()` で表示判定。`_add_item`（同一PID上書き）、`_remove_item`（除去+再計算）、`_wait_for_resolution`（per-item `done_event` で接続スレッドがブロック）。`_key_callback` → `_handle_permission_key`/`_handle_ask_key` で種別ごとのボタン処理。`_AskQuestionState` でページ遷移・回答管理。設定読み込み
-- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。Notification hookはfire-and-forget（応答不要）。エラー時はexit 0でフォールバック
+- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。Notification hookはfire-and-forget（応答不要）。エラー時はexit 0でフォールバック。`status="open"` 時は `cc-streamdeck-focus` を呼んでターミナルにフォーカス
+- `src/cc_streamdeck/focus.py` — ターミナルフォーカスコマンド（cc-streamdeck-focus）。PIDからプロセスツリーを辿ってターミナルアプリを特定し、tmuxペイン選択→TTYベースのタブ選択→アプリアクティベートの3層でフォーカス。macOS専用、標準ライブラリのみ
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
 ### ボタンレイアウト
@@ -48,6 +49,21 @@ Claude Code へ結果返却
 - Allow=右下, Deny=Allowの左, Always=DenyとAllowの間（トグル式）
 - Alwaysトグル: 1回押すとON/OFF切替。ON状態でAllowを押すとAlways Allow
 - Always非アクティブ時はラベル文字がグレー、アクティブ時は白
+
+### Open ボタン（オプション）
+
+`display.open_button = true` で Deny を "Open" に置換。押すとリクエストを送った CC のターミナルにフォーカスを移し、CC のプロンプトにフォールバック:
+
+```
+Open有効時 (Mini 3x2):
+[msg  ] [msg  ] [msg  ]
+[Open ] [Alwys] [Allow]   ← Deny が Open (#303030) に
+```
+
+- PermissionRequest: Deny → Open。AskUserQuestion: Cancel（1ページ目）→ Open
+- フロー: Open 押下 → daemon が `status="open"` で応答 → hook が `cc-streamdeck-focus <pid>` を呼ぶ → ターミナルにフォーカス → hook exit 0 → CC がフォールバック
+- cc-streamdeck-focus はプロセスツリーから3層でフォーカス: (1) tmux ペイン選択 (2) TTYベースのタブ選択 (3) アプリアクティベート
+
 ### 表示ガード時間
 
 表示切替直後のボタン押下を防止するガード時間。表示が変わった瞬間に誤って Allow を押す事故を防ぐ。アイテム種別ごとに独立設定:
@@ -91,7 +107,7 @@ Bash: 正規表現パターンマッチ（critical→low→high→medium の優�
 
 ### 設定ファイル
 
-`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別、表示ガード時間をカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
+`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別、表示ガード時間、Openボタン有効化をカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
 
 ### Hook連携: PermissionRequest
 
@@ -226,6 +242,7 @@ uv run ruff check --fix .  # 自動修正
 # 実行
 uv run cc-streamdeck-daemon          # Daemon手動起動
 uv run cc-streamdeck-daemon --stop   # Daemon停止
+uv run cc-streamdeck-focus <pid>     # ターミナルフォーカス（手動テスト用）
 ```
 
 ## Tech Stack

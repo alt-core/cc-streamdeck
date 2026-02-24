@@ -150,6 +150,7 @@ class Daemon:
         self._minor_guard_sec = self._settings.display_minor_guard_ms / 1000.0
         self._display_time: float = 0.0  # monotonic timestamp of last display switch
         self._guard_dim = self._settings.display_guard_dim
+        self._open_button = self._settings.display_open_button
         self._guard_timer: threading.Timer | None = None
 
     def start(self) -> None:
@@ -494,6 +495,30 @@ class Daemon:
             return self._minor_guard_sec
         return self._display_guard_sec
 
+    def _deny_key(self, grid_cols: int, grid_rows: int, item: _DisplayItem) -> int | None:
+        """Return the Deny key index for a permission item, or None."""
+        if item.item_type != "permission":
+            return None
+        num_choices = len(item.request.choices)
+        _, choice_keys = compute_layout(num_choices, grid_cols, grid_rows)
+        # choice_keys[1] is the Deny key (second in the list)
+        if len(choice_keys) >= 2:
+            return choice_keys[1]
+        return None
+
+    @staticmethod
+    def _focus_terminal(client_pid: int) -> None:
+        """Focus the terminal running the given client PID (background thread)."""
+        def _run():
+            try:
+                from .focus import focus_pid
+
+                focus_pid(client_pid)
+            except Exception:
+                logger.debug("Focus failed for pid=%d", client_pid, exc_info=True)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     # -- Rendering --
 
     def _get_grid(self) -> tuple[int, int]:
@@ -515,20 +540,25 @@ class Daemon:
         grid_cols, grid_rows = self._get_grid()
 
         if item.item_type == "notification":
+            open_key = (grid_rows - 1) * grid_cols if self._open_button else None
             images = render_notification(
                 item.notification_message, key_format,
                 bg_color=item.bg_color,
                 grid_cols=grid_cols, grid_rows=grid_rows,
+                open_key=open_key,
             )
         elif item.item_type == "fallback":
+            open_key = (grid_rows - 1) * grid_cols if self._open_button else None
             images = render_fallback_message(
                 item.request.tool_name, key_format,
                 bg_color=item.bg_color,
                 grid_cols=grid_cols, grid_rows=grid_rows,
+                open_key=open_key,
             )
         elif item.item_type == "ask":
             images = self._render_ask_page(item, key_format, grid_cols, grid_rows)
         else:  # permission
+            open_key = self._deny_key(grid_cols, grid_rows, item) if self._open_button else None
             images = render_permission_request(
                 item.request, key_format,
                 always_active=item.always_active,
@@ -538,6 +568,7 @@ class Daemon:
                 body_fg_color=item.body_fg,
                 grid_cols=grid_cols, grid_rows=grid_rows,
                 guard_active=guard_active,
+                open_key=open_key,
             )
         self.device_state.set_key_images(images)
 
@@ -574,10 +605,13 @@ class Daemon:
             selected = {ans} if ans else set()
 
         is_multi_page = state.total_pages > 1
+        use_open = self._open_button and state.current_page == 0
         if not is_multi_page:
-            controls = {"cancel": "Cancel", "submit": "Submit"}
+            cancel_or_open = {"open": "Open"} if use_open else {"cancel": "Cancel"}
+            controls = {**cancel_or_open, "submit": "Submit"}
         elif state.current_page == 0:
-            controls = {"cancel": "Cancel", "next": "Next"}
+            cancel_or_open = {"open": "Open"} if use_open else {"cancel": "Cancel"}
+            controls = {**cancel_or_open, "next": "Next"}
         else:
             controls = {"back": "Back", "next": "Next"}
 
@@ -615,10 +649,25 @@ class Daemon:
                 return
 
         if item.item_type == "notification":
+            if self._open_button:
+                grid_cols, grid_rows = self._get_grid()
+                open_key = (grid_rows - 1) * grid_cols
+                if key == open_key:
+                    logger.info("Open pressed on notification (pid=%d)", item.client_pid)
+                    self._focus_terminal(item.client_pid)
             self._remove_item(item)
             return
 
         if item.item_type == "fallback":
+            if self._open_button:
+                grid_cols, grid_rows = self._get_grid()
+                open_key = (grid_rows - 1) * grid_cols
+                if key == open_key:
+                    item.response = PermissionResponse(status="open")
+                    if item.done_event is not None:
+                        item.done_event.set()
+                    self._remove_item(item)
+                    return
             item.response = PermissionResponse(status="fallback")
             if item.done_event is not None:
                 item.done_event.set()
@@ -638,6 +687,16 @@ class Daemon:
         num_choices = len(request.choices)
         grid_cols, grid_rows = self._get_grid()
         _, choice_keys = compute_layout(num_choices, grid_cols, grid_rows)
+
+        # Open button: Deny key replaced with Open when display.open_button is set
+        if self._open_button:
+            deny_key = self._deny_key(grid_cols, grid_rows, item)
+            if deny_key is not None and key == deny_key:
+                item.response = PermissionResponse(status="open")
+                if item.done_event is not None:
+                    item.done_event.set()
+                self._remove_item(item)
+                return
 
         if key not in choice_keys:
             return
@@ -701,7 +760,13 @@ class Daemon:
         is_multi_page = state.total_pages > 1
 
         if key == cancel_key:
-            if state.current_page == 0:
+            if state.current_page == 0 and self._open_button:
+                # Open: focus terminal and fallback
+                item.response = PermissionResponse(status="open")
+                if item.done_event is not None:
+                    item.done_event.set()
+                self._remove_item(item)
+            elif state.current_page == 0:
                 # Cancel
                 item.response = PermissionResponse(
                     status="error", error_message="Cancelled by user"

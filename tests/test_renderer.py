@@ -324,6 +324,23 @@ class TestRenderPermissionRequest:
         for v in result.values():
             assert isinstance(v, bytes)
 
+    def test_open_key_overlay(self, sample_request):
+        """open_key adds an 'Open' label overlay on the deny key."""
+        from cc_streamdeck.renderer import render_permission_request
+
+        # Deny key for 3 choices is choice_keys[1] = key 3
+        result_with = render_permission_request(
+            sample_request, self.MOCK_FORMAT, open_key=3,
+        )
+        result_without = render_permission_request(
+            sample_request, self.MOCK_FORMAT,
+        )
+        # Key 3 (deny position) should differ: Open overlay vs Deny overlay
+        assert result_with[3] != result_without[3]
+        # Other keys should be unchanged
+        assert result_with[0] == result_without[0]
+        assert result_with[5] == result_without[5]
+
 
 class TestRenderFallbackMessage:
     MOCK_FORMAT = {
@@ -354,6 +371,16 @@ class TestRenderFallbackMessage:
             "ExitPlanMode", self.MOCK_FORMAT, grid_cols=5, grid_rows=3
         )
         assert set(result.keys()) == set(range(15))
+
+    def test_open_key_overlay(self):
+        from cc_streamdeck.renderer import render_fallback_message
+
+        without = render_fallback_message("ExitPlanMode", self.MOCK_FORMAT)
+        with_open = render_fallback_message("ExitPlanMode", self.MOCK_FORMAT, open_key=3)
+        # Bottom-left key should differ when open_key is set
+        assert without[3] != with_open[3]
+        # OK key (key 5) should be the same
+        assert without[5] == with_open[5]
 
 
 class TestRenderAskQuestionPage:
@@ -567,6 +594,16 @@ class TestRenderNotification:
         result2 = render_notification("Test", self.MOCK_FORMAT, bg_color="#200A0A")
         # Bottom row should differ with different bg colors
         assert result1[3] != result2[3]
+
+    def test_open_key_overlay(self):
+        from cc_streamdeck.renderer import render_notification
+
+        # Bottom-left key (key 3) should differ when open_key is set
+        without = render_notification("Test", self.MOCK_FORMAT)
+        with_open = render_notification("Test", self.MOCK_FORMAT, open_key=3)
+        assert without[3] != with_open[3]
+        # OK key (key 5) should be the same regardless
+        assert without[5] == with_open[5]
 
 
 class TestTruncation:

@@ -12,21 +12,32 @@ from cc_streamdeck.daemon import (
     _AskQuestionState,
     _DisplayItem,
 )
+from cc_streamdeck.settings import UserSettings
 
 
 class TestDaemonCheckExisting:
     def test_stale_socket_removed(self, tmp_path):
         sock_path = tmp_path / "test.sock"
         sock_path.touch()
-        with patch("cc_streamdeck.daemon.SOCKET_PATH", sock_path):
+        with (
+            patch("cc_streamdeck.daemon.SOCKET_PATH", sock_path),
+            patch("cc_streamdeck.daemon.load_settings", return_value=UserSettings()),
+        ):
             daemon = Daemon()
             daemon._check_existing_daemon()
             assert not sock_path.exists()
 
 
 def _make_ready_daemon():
-    """Create a daemon with mocked device_state and no guard time."""
-    daemon = Daemon()
+    """Create a daemon with mocked device_state and default settings.
+
+    Mocks load_settings() so tests are not affected by the user's config.toml.
+    """
+    with patch("cc_streamdeck.daemon.load_settings") as mock_ls:
+        from cc_streamdeck.settings import UserSettings
+
+        mock_ls.return_value = UserSettings()
+        daemon = Daemon()
     daemon.device_state = MagicMock()
     daemon.device_state.status = "ready"
     daemon.device_state.get_key_image_format.return_value = {
@@ -203,6 +214,61 @@ class TestDaemonFallback:
 
         assert resp.status == "fallback"
         assert item not in daemon._items
+
+    def test_fallback_open_button(self, exit_plan_mode_request):
+        """Open button on fallback responds with status='open'."""
+        daemon = _make_ready_daemon()
+        daemon._open_button = True
+        item = _make_item(
+            daemon, exit_plan_mode_request,
+            item_type="fallback", priority=PRIORITY_MEDIUM,
+        )
+        daemon._add_item(item)
+
+        server_sock, client_sock = socket.socketpair()
+
+        def press_open():
+            threading.Event().wait(0.3)
+            # Key 3 = bottom-left on 3x2 grid
+            daemon._key_callback(None, 3, True)
+
+        t = threading.Thread(target=press_open)
+        t.start()
+
+        resp = daemon._wait_for_resolution(item, server_sock)
+        t.join()
+        server_sock.close()
+        client_sock.close()
+
+        assert resp.status == "open"
+        assert item not in daemon._items
+
+    def test_fallback_non_open_button_dismisses(self, exit_plan_mode_request):
+        """Non-Open buttons on fallback still dismiss with 'fallback' status."""
+        daemon = _make_ready_daemon()
+        daemon._open_button = True
+        item = _make_item(
+            daemon, exit_plan_mode_request,
+            item_type="fallback", priority=PRIORITY_MEDIUM,
+        )
+        daemon._add_item(item)
+
+        server_sock, client_sock = socket.socketpair()
+
+        def press_ok():
+            threading.Event().wait(0.3)
+            # Key 5 = bottom-right (OK)
+            daemon._key_callback(None, 5, True)
+
+        t = threading.Thread(target=press_ok)
+        t.start()
+
+        resp = daemon._wait_for_resolution(item, server_sock)
+        t.join()
+        server_sock.close()
+        client_sock.close()
+
+        assert resp.status == "fallback"
 
     def test_fallback_key_release_ignored(self, exit_plan_mode_request):
         daemon = _make_ready_daemon()

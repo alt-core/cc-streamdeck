@@ -33,7 +33,7 @@ class PermissionRequest:
 class PermissionResponse:
     """Sent from Daemon to Hook Client."""
 
-    status: Literal["ok", "no_device", "error", "fallback"] = "ok"
+    status: Literal["ok", "no_device", "error", "fallback", "open"] = "ok"
     chosen: PermissionChoice | None = None
     error_message: str = ""
     ask_answers: dict = field(default_factory=dict)

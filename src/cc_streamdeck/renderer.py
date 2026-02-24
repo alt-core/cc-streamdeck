@@ -18,6 +18,7 @@ CHOICE_COLORS = {
     "always_off": "#000040",
     "always_on": "#0050D0",
     "allow_always": "#0050D0",
+    "open": "#303030",
 }
 
 # Font sizes: M PLUS 1 Code (AA) for 20/16, PixelMplus10 (dot-by-dot) for 10
@@ -268,6 +269,7 @@ def render_permission_request(
     grid_cols: int = GRID_COLS,
     grid_rows: int = GRID_ROWS,
     guard_active: bool = False,
+    open_key: int | None = None,
 ) -> dict[int, bytes]:
     """Render button images for a permission request.
 
@@ -320,7 +322,10 @@ def render_permission_request(
         y = row * key_h
         tile = virtual.crop((x, y, x + key_w, y + key_h))
 
-        if key in choice_keys:
+        if open_key is not None and key == open_key:
+            open_fg = "#404040" if guard_active else "white"
+            tile = _overlay_choice_label(tile, "Open", CHOICE_COLORS["open"], open_fg)
+        elif key in choice_keys:
             idx = choice_keys.index(key)
             if idx < num_choices:
                 label, bg_color, text_color = _choice_appearance(
@@ -339,6 +344,7 @@ def render_fallback_message(
     bg_color: str = "#1A0A00",
     grid_cols: int = GRID_COLS,
     grid_rows: int = GRID_ROWS,
+    open_key: int | None = None,
 ) -> dict[int, bytes]:
     """Render a 'see terminal' fallback message across all buttons.
 
@@ -376,7 +382,9 @@ def render_fallback_message(
         x = col * key_w
         y = row * key_h
         tile = virtual.crop((x, y, x + key_w, y + key_h))
-        if key == ok_key:
+        if open_key is not None and key == open_key:
+            tile = _overlay_choice_label(tile, "Open", CHOICE_COLORS["open"])
+        elif key == ok_key:
             tile = _overlay_choice_label(tile, "OK", "#404040")
         result[key] = pil_to_native(tile, key_image_format)
 
@@ -503,7 +511,9 @@ def render_ask_question_page(
         control_key_map[submit_key] = (control_buttons["submit"], ASK_SUBMIT_BG, ASK_CONTROL_FG, "submit")
     if "next" in control_buttons:
         control_key_map[submit_key] = (control_buttons["next"], ASK_NAV_BG, ASK_CONTROL_FG, "next")
-    if "cancel" in control_buttons:
+    if "open" in control_buttons:
+        control_key_map[cancel_key] = (control_buttons["open"], CHOICE_COLORS["open"], ASK_CONTROL_FG, "open")
+    elif "cancel" in control_buttons:
         control_key_map[cancel_key] = (control_buttons["cancel"], ASK_CANCEL_BG, ASK_CONTROL_FG, "cancel")
     if "back" in control_buttons:
         control_key_map[cancel_key] = (control_buttons["back"], ASK_NAV_BG, ASK_CONTROL_FG, "back")
@@ -553,6 +563,7 @@ def render_notification(
     bg_color: str = "#0A0A20",
     grid_cols: int = GRID_COLS,
     grid_rows: int = GRID_ROWS,
+    open_key: int | None = None,
 ) -> dict[int, bytes]:
     """Render a low-priority notification on the bottom row only.
 
@@ -611,7 +622,9 @@ def render_notification(
             col = key - bottom_start
             x = col * key_w
             tile = canvas.crop((x, 0, x + key_w, key_h))
-            if key == ok_key:
+            if open_key is not None and key == open_key:
+                tile = _overlay_choice_label(tile, "Open", CHOICE_COLORS["open"])
+            elif key == ok_key:
                 tile = _overlay_choice_label(tile, "OK", "#404040")
             result[key] = pil_to_native(tile, key_image_format)
 

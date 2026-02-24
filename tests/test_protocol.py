@@ -71,6 +71,13 @@ class TestPermissionResponse:
         assert decoded.chosen.behavior == "deny"
         assert decoded.chosen.message == "Not allowed"
 
+    def test_open_status_round_trip(self):
+        resp = PermissionResponse(status="open")
+        data = encode(resp)
+        decoded = decode_response(data)
+        assert decoded.status == "open"
+        assert decoded.chosen is None
+
 
 class TestNotificationMessage:
     def test_round_trip(self):

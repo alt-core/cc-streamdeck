@@ -205,6 +205,30 @@ def _send_notification(hook_input: dict) -> None:
         sock.close()
 
 
+def _focus_terminal(client_pid: int) -> None:
+    """Attempt to focus the terminal running Claude Code."""
+    import shutil
+    from pathlib import Path
+
+    hook_dir = Path(sys.executable).parent
+    focus_cmd = hook_dir / "cc-streamdeck-focus"
+    if not focus_cmd.exists():
+        found = shutil.which("cc-streamdeck-focus")
+        if found is None:
+            _log("cc-streamdeck-focus not found")
+            return
+        focus_cmd = Path(found)
+
+    try:
+        subprocess.run(
+            [str(focus_cmd), str(client_pid)],
+            timeout=5.0,
+            capture_output=True,
+        )
+    except Exception as e:
+        _log(f"Focus command failed: {e}")
+
+
 def main() -> None:
     try:
         raw_input = sys.stdin.read()
@@ -231,6 +255,10 @@ def main() -> None:
             sock.close()
 
         _log(f"Response: {response.status}")
+
+        if response.status == "open":
+            _focus_terminal(os.getppid())
+            sys.exit(0)
 
         if response.status != "ok":
             sys.exit(0)

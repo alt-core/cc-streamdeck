@@ -13,6 +13,7 @@ dependencies = [
 [project.scripts]
 cc-streamdeck-daemon = "cc_streamdeck.daemon:main"
 cc-streamdeck-hook = "cc_streamdeck.hook:main"
+cc-streamdeck-focus = "cc_streamdeck.focus:main"
 
 [build-system]
 requires = ["hatchling"]
