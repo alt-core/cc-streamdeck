@@ -125,30 +125,48 @@ class TestIsDescendant:
 
 
 class TestTryTmuxFocus:
+    @patch("cc_streamdeck.focus._get_tty")
+    @patch("cc_streamdeck.focus._walk_ancestors")
+    @patch("cc_streamdeck.focus._find_terminal_app")
     @patch("cc_streamdeck.focus.subprocess.run")
     @patch("cc_streamdeck.focus._is_descendant")
-    def test_selects_matching_pane(self, mock_desc, mock_run):
-        list_result = MagicMock(returncode=0, stdout="100 %0 main:0\n200 %1 main:1\n")
-        mock_run.return_value = list_result
+    def test_selects_matching_pane_and_finds_terminal(
+        self, mock_desc, mock_run, mock_find_app, mock_walk, mock_tty,
+    ):
+        list_panes = MagicMock(returncode=0, stdout="100 %0 main:0\n200 %1 main:1\n")
+        list_clients = MagicMock(returncode=0, stdout="500\n")
+        mock_run.side_effect = [
+            list_panes,                   # list-panes
+            MagicMock(returncode=0),      # select-window
+            MagicMock(returncode=0),      # select-pane
+            list_clients,                 # list-clients
+        ]
         mock_desc.side_effect = lambda pid, ancestor: pid == 300 and ancestor == 200
+        mock_walk.return_value = [(500, "tmux"), (400, "zsh"), (300, "iTerm2")]
+        mock_find_app.return_value = "iTerm2"
+        mock_tty.return_value = "ttys003"
 
-        # Override the first call (list-panes) and subsequent calls (select-*)
-        results = [list_result, MagicMock(returncode=0), MagicMock(returncode=0)]
-        mock_run.side_effect = results
-
-        assert _try_tmux_focus(300)
-        # select-window and select-pane should have been called
-        assert mock_run.call_count == 3
+        result = _try_tmux_focus(300)
+        assert result == ("iTerm2", "ttys003")
 
     @patch("cc_streamdeck.focus.subprocess.run")
-    def test_returns_false_when_tmux_not_installed(self, mock_run):
+    @patch("cc_streamdeck.focus._is_descendant")
+    def test_returns_none_when_no_matching_pane(self, mock_desc, mock_run):
+        list_panes = MagicMock(returncode=0, stdout="100 %0 main:0\n")
+        mock_run.return_value = list_panes
+        mock_desc.return_value = False
+
+        assert _try_tmux_focus(300) is None
+
+    @patch("cc_streamdeck.focus.subprocess.run")
+    def test_returns_none_when_tmux_not_installed(self, mock_run):
         mock_run.side_effect = FileNotFoundError
-        assert not _try_tmux_focus(300)
+        assert _try_tmux_focus(300) is None
 
     @patch("cc_streamdeck.focus.subprocess.run")
-    def test_returns_false_when_no_tmux_server(self, mock_run):
+    def test_returns_none_when_no_tmux_server(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="")
-        assert not _try_tmux_focus(300)
+        assert _try_tmux_focus(300) is None
 
 
 class TestActivateApp:

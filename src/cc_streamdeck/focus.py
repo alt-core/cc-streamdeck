@@ -106,8 +106,12 @@ def _is_descendant(pid: int, ancestor_pid: int) -> bool:
     return False
 
 
-def _try_tmux_focus(client_pid: int) -> bool:
-    """If running inside tmux, select the right pane. Returns True if successful."""
+def _try_tmux_focus(client_pid: int) -> tuple[str, str] | None:
+    """If running inside tmux, select the right pane.
+
+    Returns (terminal_app, client_tty) by walking the tmux client's
+    ancestor chain, or None if not running in tmux.
+    """
     try:
         result = subprocess.run(
             ["tmux", "list-panes", "-a", "-F",
@@ -115,12 +119,13 @@ def _try_tmux_focus(client_pid: int) -> bool:
             capture_output=True, text=True, timeout=2.0,
         )
         if result.returncode != 0:
-            return False
+            return None
     except FileNotFoundError:
-        return False
+        return None
     except Exception:
-        return False
+        return None
 
+    session_name = None
     for line in result.stdout.strip().split("\n"):
         parts = line.split(None, 2)
         if len(parts) < 3:
@@ -140,8 +145,39 @@ def _try_tmux_focus(client_pid: int) -> bool:
                 ["tmux", "select-pane", "-t", pane_id],
                 capture_output=True, timeout=2.0,
             )
-            return True
-    return False
+            session_name = target.split(":")[0]
+            break
+
+    if session_name is None:
+        return None
+
+    # Find the tmux client attached to this session.
+    # The client process (not the server) is a child of the terminal app,
+    # so walking its ancestors reveals which terminal we're in.
+    try:
+        result = subprocess.run(
+            ["tmux", "list-clients", "-t", session_name,
+             "-F", "#{client_pid}"],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    tmux_client_pid = int(line)
+                except ValueError:
+                    continue
+                ancestors = _walk_ancestors(tmux_client_pid)
+                app = _find_terminal_app(ancestors)
+                tty = _get_tty(tmux_client_pid)
+                if app:
+                    return app, tty
+    except Exception:
+        pass
+
+    return None
 
 
 def _try_tab_focus(app_name: str, tty: str) -> bool:
@@ -260,16 +296,22 @@ def focus_pid(client_pid: int) -> None:
     tty = _get_tty(client_pid)
     logger.debug("focus_pid(%d): tty=%r, ancestors=%s", client_pid, tty, ancestors)
 
-    # Layer 1: tmux pane selection
-    _try_tmux_focus(client_pid)
+    # Layer 1: tmux pane selection (also resolves terminal app via client)
+    tmux_result = _try_tmux_focus(client_pid)
 
-    # Layer 2: terminal tab selection by TTY
-    app = _find_terminal_app(ancestors)
-    if app and tty:
-        _try_tab_focus(app, tty)
-
-    # Layer 3: app activation
-    _activate_app(app or "Terminal")
+    if tmux_result:
+        app, client_tty = tmux_result
+        # Layer 2: tab selection using tmux client's TTY
+        if client_tty:
+            _try_tab_focus(app, client_tty)
+        # Layer 3: app activation
+        _activate_app(app)
+    else:
+        # Non-tmux: use direct ancestor chain
+        app = _find_terminal_app(ancestors)
+        if app and tty:
+            _try_tab_focus(app, tty)
+        _activate_app(app or "Terminal")
 
 
 def main() -> None:
