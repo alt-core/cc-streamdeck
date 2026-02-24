@@ -143,6 +143,7 @@ def _render_text_on_canvas(
     header_bg_color: str = "#101010",
     header_fg_color: str = "#808080",
     body_fg_color: str = "white",
+    header_width: int | None = None,
 ) -> Image.Image:
     """Render header + content text on a virtual canvas."""
     virtual = Image.new("RGB", (vw, vh), bg_color)
@@ -157,8 +158,9 @@ def _render_text_on_canvas(
     # Shift header up by descent so text starts at pixel y=0
     y = -header_descent
 
-    # Header background strip
-    draw.rectangle([(0, 0), (vw, header_size - 1)], fill=header_bg_color)
+    # Header background strip (narrower when open_key occupies top-right)
+    hw = header_width if header_width is not None else vw
+    draw.rectangle([(0, 0), (hw, header_size - 1)], fill=header_bg_color)
 
     # Tool name header (20px when content is 10px, otherwise same as content)
     draw.text((0, y), f" {tool_name}", font=header_font, fill=header_fg_color)
@@ -258,6 +260,30 @@ def _overlay_choice_label(
     return tile
 
 
+def _overlay_top_label(
+    tile: Image.Image, label: str, bg_color: str, text_color: str = "white"
+) -> Image.Image:
+    """Overlay a colored label strip at the top of a tile."""
+    tile = tile.copy()
+    draw = ImageDraw.Draw(tile)
+    tw, _ = tile.size
+
+    draw.rectangle(
+        [(0, 0), (tw, CHOICE_LABEL_HEIGHT)],
+        fill=bg_color,
+    )
+
+    font = load_font("bold", FONT_SIZE_LARGE)
+    draw.text(
+        (tw // 2, CHOICE_LABEL_HEIGHT // 2),
+        label,
+        font=font,
+        fill=text_color,
+        anchor="mm",
+    )
+    return tile
+
+
 def render_permission_request(
     request: PermissionRequest,
     key_image_format: dict,
@@ -301,6 +327,7 @@ def render_permission_request(
     # Adaptive font size: 20 → 16 → 10 (truncate at 10 if still overflows)
     font_size = _choose_font_size(vw, text_max_y, tool_name, content)
 
+    header_width = (grid_cols - 1) * key_w if open_key is not None else None
     virtual = _render_text_on_canvas(
         vw,
         vh,
@@ -312,6 +339,7 @@ def render_permission_request(
         header_bg_color=header_bg_color,
         header_fg_color=header_fg_color,
         body_fg_color=body_fg_color,
+        header_width=header_width,
     )
 
     # Split into per-key tiles and overlay choice labels
@@ -324,7 +352,7 @@ def render_permission_request(
 
         if open_key is not None and key == open_key:
             open_fg = "#404040" if guard_active else "white"
-            tile = _overlay_choice_label(tile, "Open", CHOICE_COLORS["open"], open_fg)
+            tile = _overlay_top_label(tile, "Go CC", CHOICE_COLORS["open"], open_fg)
         elif key in choice_keys:
             idx = choice_keys.index(key)
             if idx < num_choices:
@@ -362,8 +390,9 @@ def render_fallback_message(
     body_font = load_font("regular", FONT_SIZE_MEDIUM)
     _, header_descent = header_font.getmetrics()
 
-    # Header
-    draw.rectangle([(0, 0), (vw, FONT_SIZE_LARGE - 1)], fill="#604000")
+    # Header (narrower when open_key occupies top-right)
+    hw = (grid_cols - 1) * key_w if open_key is not None else vw
+    draw.rectangle([(0, 0), (hw, FONT_SIZE_LARGE - 1)], fill="#604000")
     draw.text((0, -header_descent), f" {tool_name}", font=header_font, fill="#FFD080")
 
     # Body message
@@ -383,7 +412,7 @@ def render_fallback_message(
         y = row * key_h
         tile = virtual.crop((x, y, x + key_w, y + key_h))
         if open_key is not None and key == open_key:
-            tile = _overlay_choice_label(tile, "Open", CHOICE_COLORS["open"])
+            tile = _overlay_top_label(tile, "Go CC", CHOICE_COLORS["open"])
         elif key == ok_key:
             tile = _overlay_choice_label(tile, "OK", "#404040")
         result[key] = pil_to_native(tile, key_image_format)
@@ -501,9 +530,9 @@ def render_ask_question_page(
     key_w, key_h = key_image_format["size"]
     key_size = (key_w, key_h)
 
-    # Fixed control button positions
+    # Fixed control button positions: right column
     submit_key = total_keys - 1  # bottom-right
-    cancel_key = total_keys - grid_cols  # bottom-left
+    cancel_key = grid_cols - 1   # top-right
 
     # Determine which keys are control buttons: key → (label, bg, fg, role)
     control_key_map: dict[int, tuple[str, str, str, str]] = {}
@@ -531,16 +560,21 @@ def render_ask_question_page(
     for key in range(total_keys):
         if key in control_key_map:
             label, ctrl_bg, ctrl_fg, role = control_key_map[key]
-            # Body area: page_info on cancel/back, page_description on submit/next
-            if role in ("cancel", "back") and page_info:
+            is_top = (key == cancel_key)
+            # Body area: page_info on cancel/back/open, page_description on submit/next
+            if role in ("cancel", "back", "open") and page_info:
                 body = _render_full_button(body_size, page_info, bg_color, "#808080")
             elif role in ("submit", "next") and page_description:
                 body = _render_full_button(body_size, page_description, bg_color, "#606060")
             else:
                 body = Image.new("RGB", body_size, bg_color)
             tile = Image.new("RGB", key_size, bg_color)
-            tile.paste(body, (0, 0))
-            tile = _overlay_choice_label(tile, label, ctrl_bg, ctrl_fg)
+            if is_top:
+                tile.paste(body, (0, CHOICE_LABEL_HEIGHT))
+                tile = _overlay_top_label(tile, label, ctrl_bg, ctrl_fg)
+            else:
+                tile.paste(body, (0, 0))
+                tile = _overlay_choice_label(tile, label, ctrl_bg, ctrl_fg)
         elif key in option_keys:
             idx = option_keys.index(key)
             label = options[idx]
@@ -617,14 +651,17 @@ def render_notification(
 
     for key in range(total_keys):
         if key < bottom_start:
-            result[key] = black_bytes
+            if open_key is not None and key == open_key:
+                tile = Image.new("RGB", (key_w, key_h), "#000000")
+                tile = _overlay_top_label(tile, "Go CC", CHOICE_COLORS["open"])
+                result[key] = pil_to_native(tile, key_image_format)
+            else:
+                result[key] = black_bytes
         else:
             col = key - bottom_start
             x = col * key_w
             tile = canvas.crop((x, 0, x + key_w, key_h))
-            if open_key is not None and key == open_key:
-                tile = _overlay_choice_label(tile, "Open", CHOICE_COLORS["open"])
-            elif key == ok_key:
+            if key == ok_key:
                 tile = _overlay_choice_label(tile, "OK", "#404040")
             result[key] = pil_to_native(tile, key_image_format)
 

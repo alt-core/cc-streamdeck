@@ -50,19 +50,40 @@ Claude Code へ結果返却
 - Alwaysトグル: 1回押すとON/OFF切替。ON状態でAllowを押すとAlways Allow
 - Always非アクティブ時はラベル文字がグレー、アクティブ時は白
 
-### Open ボタン（オプション）
+### Go CC ボタン（macOS 自動有効）
 
-`display.open_button = true` で Deny を "Open" に置換。押すとリクエストを送った CC のターミナルにフォーカスを移し、CC のプロンプトにフォールバック:
+macOS（`sys.platform == "darwin"`）では全てのビューの右上キーに "Go CC" ボタンが自動表示される。押すとリクエストを送った CC のターミナルにフォーカスを移し、CC のプロンプトにフォールバック:
 
 ```
-Open有効時 (Mini 3x2):
-[msg  ] [msg  ] [msg  ]
-[Open ] [Alwys] [Allow]   ← Deny が Open (#303030) に
+PermissionRequest (macOS, Mini 3x2):
+[header][header][Go CC▲]   ← 右上にトップオーバーレイ（ヘッダは2ボタン分に縮小）
+[Deny▼][Alwys▼][Allow▼]   ← 全選択肢が維持
+
+Fallback (macOS):
+[msg  ][msg  ][Go CC▲]
+[     ][     ][OK▼  ]
+
+Notification (macOS):
+[     ][     ][Go CC▲]   ← 黒背景に上部オーバーレイ
+[ message text    OK▼]
+
+AskUserQuestion (macOS, 1ページ目):
+[Opt A][Opt B][Go CC▲]   ← 右上: Go CC（トップオーバーレイ）
+[Opt C][Opt D][Submit▼]  ← 右下: Submit/Next
+
+AskUserQuestion (2ページ目以降):
+[Opt X][Opt Y][Back▲ ]   ← 右上: Back
+[     ][     ][Next▼ ]
+
+非macOS:
+[Opt A][Opt B][Cancel▲]  ← 右上: Cancel
+[Opt C][Opt D][Submit▼]
 ```
 
-- PermissionRequest: Deny → Open。AskUserQuestion: Cancel（1ページ目）→ Open
-- フロー: Open 押下 → daemon が `status="open"` で応答 → hook が `cc-streamdeck-focus <pid>` を呼ぶ → ターミナルにフォーカス → hook exit 0 → CC がフォールバック
+- フロー: Go CC 押下 → daemon が `status="open"` で応答 → hook が `cc-streamdeck-focus <pid>` を呼ぶ → ターミナルにフォーカス → hook exit 0 → CC がフォールバック
+- Notification は fire-and-forget なので daemon が直接 `focus_pid()` を呼ぶ
 - cc-streamdeck-focus はプロセスツリーから3層でフォーカス: (1) tmux ペイン選択 (2) TTYベースのタブ選択 (3) アプリアクティベート
+- 非 macOS: 全ビューで Go CC なし（右上もヘッダの一部）
 
 ### 表示ガード時間
 
@@ -107,7 +128,7 @@ Bash: 正規表現パターンマッチ（critical→low→high→medium の優�
 
 ### 設定ファイル
 
-`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別、表示ガード時間、Openボタン有効化をカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
+`~/.config/cc-streamdeck/config.toml`（XDG準拠、全セクション省略可）。リスク色、インスタンスパレット、ツール別リスクレベル、Bashパターン追加、パス引き上げパターン、Notification表示種別、表示ガード時間をカスタマイズ可能。ユーザーパターンはbuilt-inに加算。デーモン起動時に1回読み込み。
 
 ### Hook連携: PermissionRequest
 
@@ -139,18 +160,18 @@ AskUserQuestion は Stream Deck 上で選択肢を直接表示し、ボタン押
 
 ```
 単一質問 (3選択肢, Mini):   複数質問 (2ページ目):     確認ページ:
-[Opt A ] [Opt B ] [Opt C ]  [Opt X ] [Opt Y ] [     ]  [     ] [     ] [     ]
-[Cancel] [     ] [Submit]   [Back  ] [     ] [Next ]   [Back ] [     ] [Submit]
- ↑header         ↑question   ↑hdr+pg           ↑question ↑(empty)        ↑(empty)
+[Opt A ] [Opt B ] [Cancel▲]  [Opt X ] [Opt Y ] [Back▲ ]  [     ] [     ] [Back▲ ]
+[Opt C ] [     ] [Submit▼]  [     ] [     ] [Next▼ ]  [     ] [     ] [Submit▼]
+                  ↑question                   ↑question
 ```
 
-- 選択肢ボタン: 左上から順に1ボタン1選択肢、最大 `ボタン数 - 2` 個。ラベル（太字）+ description（小文字グレー）を表示。選択済みは強調色
-- 操作ボタン: PermissionRequest と同じ「下部20pxにラベルオーバーレイ」方式。上部本体領域にコンテキスト情報を表示:
-  - Cancel/Back キー本体: `page_info`（header + ページ番号、例: "Language\n1/3"）を `#808080` で描画。単一質問時はページ番号なし
-  - Submit/Next キー本体: `page_description`（question テキスト）を `#606060` で描画
-  - Submit=右下(緑ラベル), Cancel=左下(赤ラベル)。複数質問時は Back/Next(グレーラベル) でページ遷移
+- 選択肢ボタン: 左上から順に1ボタン1選択肢（右列のコントロールキーを除く）、最大 `ボタン数 - 2` 個。ラベル（太字）+ description（小文字グレー）を表示。選択済みは強調色
+- コントロールボタン: 右列に配置（上: ナビゲーション、下: アクション）
+  - Cancel/Back/Go CC = 右上（トップオーバーレイ）。本体領域に `page_info`（header + ページ番号、例: "Language\n1/3"）を `#808080` で描画。単一質問時はページ番号なし
+  - Submit/Next = 右下（下部オーバーレイ）。本体領域に `page_description`（question テキスト）を `#606060` で描画
+  - macOS では1ページ目の Cancel が Go CC に置換
 - multiSelect: トグル式（各ボタン ON/OFF 切替、複数選択して Submit）
-- 複数質問: 1ページ目左下=Cancel、2ページ目以降左下=Back。最終質問後に確認ページ（Back + Submit のみ）
+- 複数質問: 1ページ目右上=Cancel/Go CC、2ページ目以降右上=Back。最終質問後に確認ページ（Back + Submit のみ）
 - 空きボタン押下は全ページで無視。背景色はインスタンス識別色
 - `_AskQuestionState`: ページ番号・回答管理。`_handle_ask_key()` でボタン操作、`_render_ask_page()` で再レンダリング
 - `render_ask_question_page()`: 選択肢は全面ボタン、操作ボタンは本体+オーバーレイラベル

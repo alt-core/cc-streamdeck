@@ -46,8 +46,6 @@ class UserSettings:
     display_minor_guard_ms: int = 0
     # Dim choice labels during guard period (visual feedback)
     display_guard_dim: bool = False
-    # Replace Deny/Cancel with Open button (focus terminal)
-    display_open_button: bool = False
 
 
 def load_settings() -> UserSettings:
@@ -141,9 +139,6 @@ def _parse(data: dict) -> UserSettings:
     guard_dim = data.get("display", {}).get("guard_dim")
     if isinstance(guard_dim, bool):
         settings.display_guard_dim = guard_dim
-    open_button = data.get("display", {}).get("open_button")
-    if isinstance(open_button, bool):
-        settings.display_open_button = open_button
 
     # [risk.path_*]
     for level, attr in [

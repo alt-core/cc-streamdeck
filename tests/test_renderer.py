@@ -10,6 +10,7 @@ from cc_streamdeck.renderer import (
     _choice_appearance,
     _choose_font_size,
     _overlay_choice_label,
+    _overlay_top_label,
     _render_text_on_canvas,
     _text_fits,
     compute_layout,
@@ -286,6 +287,65 @@ class TestOverlayChoiceLabel:
         assert any(ch[1] > 0 for ch in extrema)
 
 
+class TestOverlayTopLabel:
+    def test_returns_correct_size(self):
+        from PIL import Image
+
+        tile = Image.new("RGB", KEY_PIXEL_SIZE, "black")
+        result = _overlay_top_label(tile, "Go CC", "#303030")
+        assert result.size == KEY_PIXEL_SIZE
+
+    def test_does_not_mutate_original(self):
+        from PIL import Image
+
+        tile = Image.new("RGB", KEY_PIXEL_SIZE, "black")
+        original_data = tile.tobytes()
+        _overlay_top_label(tile, "Go CC", "#303030")
+        assert tile.tobytes() == original_data
+
+    def test_top_strip_has_color(self):
+        from PIL import Image
+
+        tile = Image.new("RGB", KEY_PIXEL_SIZE, "black")
+        result = _overlay_top_label(tile, "Go CC", "#303030")
+        # Top strip should have non-black pixels
+        top = result.crop((0, 0, KEY_PIXEL_SIZE[0], CHOICE_LABEL_HEIGHT))
+        extrema = top.getextrema()
+        assert any(ch[1] > 0 for ch in extrema)
+
+    def test_bottom_area_mostly_unchanged(self):
+        from PIL import Image
+
+        tile = Image.new("RGB", KEY_PIXEL_SIZE, "black")
+        result = _overlay_top_label(tile, "Go CC", "#303030")
+        # Area well below the strip (leaving margin for font anti-aliasing)
+        margin = CHOICE_LABEL_HEIGHT + 5
+        bottom = result.crop(
+            (0, margin, KEY_PIXEL_SIZE[0], KEY_PIXEL_SIZE[1])
+        )
+        extrema = bottom.getextrema()
+        assert all(ch == (0, 0) for ch in extrema)
+
+
+class TestHeaderWidth:
+    def test_header_narrower_with_open_key(self):
+        """Header background is narrower when header_width is set."""
+        vw = GRID_COLS * KEY_PIXEL_SIZE[0]
+        vh = GRID_ROWS * KEY_PIXEL_SIZE[1]
+        header_w = (GRID_COLS - 1) * KEY_PIXEL_SIZE[0]
+        img = _render_text_on_canvas(
+            vw, vh, vh, "Bash", "ls", FONT_SIZE_LARGE,
+            header_bg_color="#800000", header_width=header_w,
+        )
+        # Pixel at the right end of the narrowed header should NOT have header color
+        # (it's beyond header_width, so it should be body bg = black)
+        pixel_outside = img.getpixel((vw - 1, 0))
+        assert pixel_outside[0] == 0  # black, not red
+        # Pixel inside header width should have header color
+        pixel_inside = img.getpixel((header_w - 1, 0))
+        assert pixel_inside[0] >= 0x80  # red from #800000
+
+
 class TestRenderPermissionRequest:
     """Integration tests using mock key_image_format."""
 
@@ -325,20 +385,20 @@ class TestRenderPermissionRequest:
             assert isinstance(v, bytes)
 
     def test_open_key_overlay(self, sample_request):
-        """open_key adds an 'Open' label overlay on the deny key."""
+        """open_key adds a 'Go CC' top label overlay on the top-right key."""
         from cc_streamdeck.renderer import render_permission_request
 
-        # Deny key for 3 choices is choice_keys[1] = key 3
+        # Top-right key on 3x2 grid = key 2
         result_with = render_permission_request(
-            sample_request, self.MOCK_FORMAT, open_key=3,
+            sample_request, self.MOCK_FORMAT, open_key=2,
         )
         result_without = render_permission_request(
             sample_request, self.MOCK_FORMAT,
         )
-        # Key 3 (deny position) should differ: Open overlay vs Deny overlay
-        assert result_with[3] != result_without[3]
-        # Other keys should be unchanged
-        assert result_with[0] == result_without[0]
+        # Key 2 (top-right) should differ: Go CC overlay vs plain header
+        assert result_with[2] != result_without[2]
+        # Choice keys should be unchanged (Deny still present)
+        assert result_with[3] == result_without[3]
         assert result_with[5] == result_without[5]
 
 
@@ -376,9 +436,9 @@ class TestRenderFallbackMessage:
         from cc_streamdeck.renderer import render_fallback_message
 
         without = render_fallback_message("ExitPlanMode", self.MOCK_FORMAT)
-        with_open = render_fallback_message("ExitPlanMode", self.MOCK_FORMAT, open_key=3)
-        # Bottom-left key should differ when open_key is set
-        assert without[3] != with_open[3]
+        with_open = render_fallback_message("ExitPlanMode", self.MOCK_FORMAT, open_key=2)
+        # Top-right key should differ when open_key is set
+        assert without[2] != with_open[2]
         # OK key (key 5) should be the same
         assert without[5] == with_open[5]
 
@@ -482,7 +542,7 @@ class TestRenderAskQuestionPage:
         """page_info is rendered in the body area of the cancel/back control key."""
         from cc_streamdeck.renderer import render_ask_question_page
 
-        # 3x2: key 3=cancel, key 5=next
+        # 3x2: key 2=cancel (top-right), key 5=next
         result_with = render_ask_question_page(
             options=["A", "B"],
             selected=set(),
@@ -497,10 +557,10 @@ class TestRenderAskQuestionPage:
             key_image_format=self.MOCK_FORMAT,
             page_info="",
         )
-        # Cancel key (3) should differ (has page_info in body)
-        assert result_with[3] != result_without[3]
-        # Empty key (2) should be same
-        assert result_with[2] == result_without[2]
+        # Cancel key (2, top-right) should differ (has page_info in body)
+        assert result_with[2] != result_without[2]
+        # Empty key (4) should be same
+        assert result_with[4] == result_without[4]
 
     def test_page_description_on_submit_key(self):
         """page_description is rendered in the body area of the submit/next control key."""
@@ -527,7 +587,7 @@ class TestRenderAskQuestionPage:
         """page_info on control keys works regardless of option count."""
         from cc_streamdeck.renderer import render_ask_question_page
 
-        # 4 options on 3x2: keys 0,1,2,4=options, 3=cancel, 5=next
+        # 4 options on 3x2: keys 0,1,3,4=options, 2=cancel(top-right), 5=next
         result_with = render_ask_question_page(
             options=["A", "B", "C", "D"],
             selected=set(),
@@ -542,8 +602,8 @@ class TestRenderAskQuestionPage:
             key_image_format=self.MOCK_FORMAT,
             page_info="",
         )
-        # Cancel key (3) should differ — page_info always fits on control key body
-        assert result_with[3] != result_without[3]
+        # Cancel key (2, top-right) should differ — page_info always fits on control key body
+        assert result_with[2] != result_without[2]
 
 
 class TestRenderNotification:
@@ -598,10 +658,10 @@ class TestRenderNotification:
     def test_open_key_overlay(self):
         from cc_streamdeck.renderer import render_notification
 
-        # Bottom-left key (key 3) should differ when open_key is set
+        # Top-right key (key 2) should differ when open_key is set
         without = render_notification("Test", self.MOCK_FORMAT)
-        with_open = render_notification("Test", self.MOCK_FORMAT, open_key=3)
-        assert without[3] != with_open[3]
+        with_open = render_notification("Test", self.MOCK_FORMAT, open_key=2)
+        assert without[2] != with_open[2]
         # OK key (key 5) should be the same regardless
         assert without[5] == with_open[5]
 

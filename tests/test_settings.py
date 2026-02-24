@@ -221,11 +221,3 @@ class TestDisplayGuardSettings:
         settings = _parse(data)
         assert settings.display_guard_dim is True
 
-    def test_default_open_button_off(self):
-        settings = _parse({})
-        assert settings.display_open_button is False
-
-    def test_open_button_on(self):
-        data = {"display": {"open_button": True}}
-        settings = _parse(data)
-        assert settings.display_open_button is True

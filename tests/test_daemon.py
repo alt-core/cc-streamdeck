@@ -150,6 +150,59 @@ class TestDaemonKeyCallback:
         assert item.response.chosen.label == "Deny"
 
 
+class TestDaemonGoCC:
+    """Tests for Go CC button (top-right, macOS auto-enable)."""
+
+    def _setup(self, request, item_type="permission", priority=PRIORITY_HIGH):
+        daemon = _make_ready_daemon()
+        daemon._open_button = True
+        item = _make_item(daemon, request, item_type=item_type, priority=priority)
+        daemon._items.append(item)
+        daemon._current_item = item
+        return daemon, item
+
+    def test_permission_go_cc(self, sample_request):
+        """Go CC on permission (key 2 = top-right) responds with status='open'."""
+        daemon, item = self._setup(sample_request)
+        daemon._key_callback(None, 2, True)
+        assert item.done_event.is_set()
+        assert item.response.status == "open"
+
+    def test_permission_deny_still_works(self, sample_request):
+        """Deny key (key 3) still works when Go CC is enabled."""
+        daemon, item = self._setup(sample_request)
+        daemon._key_callback(None, 3, True)
+        assert item.done_event.is_set()
+        assert item.response.chosen.label == "Deny"
+        assert item.response.chosen.behavior == "deny"
+
+    def test_permission_allow_still_works(self, sample_request):
+        """Allow key (key 5) still works when Go CC is enabled."""
+        daemon, item = self._setup(sample_request)
+        daemon._key_callback(None, 5, True)
+        assert item.done_event.is_set()
+        assert item.response.chosen.label == "Allow"
+
+    def test_notification_go_cc(self):
+        """Go CC on notification focuses terminal."""
+        from cc_streamdeck.protocol import NotificationMessage
+
+        daemon = _make_ready_daemon()
+        daemon._open_button = True
+
+        msg = NotificationMessage(
+            notification_type="idle_prompt", message="Idle", client_pid=1000,
+        )
+        daemon._handle_notification(msg)
+        assert daemon._current_item is not None
+
+        with patch.object(Daemon, "_focus_terminal") as mock_focus:
+            daemon._key_callback(None, 2, True)
+            mock_focus.assert_called_once_with(1000)
+
+        assert daemon._current_item is None
+
+
 class TestDaemonWaitForResolution:
     def test_client_disconnect_removes_item(self, sample_request):
         daemon = _make_ready_daemon()
@@ -216,7 +269,7 @@ class TestDaemonFallback:
         assert item not in daemon._items
 
     def test_fallback_open_button(self, exit_plan_mode_request):
-        """Open button on fallback responds with status='open'."""
+        """Go CC button on fallback responds with status='open'."""
         daemon = _make_ready_daemon()
         daemon._open_button = True
         item = _make_item(
@@ -229,8 +282,8 @@ class TestDaemonFallback:
 
         def press_open():
             threading.Event().wait(0.3)
-            # Key 3 = bottom-left on 3x2 grid
-            daemon._key_callback(None, 3, True)
+            # Key 2 = top-right on 3x2 grid
+            daemon._key_callback(None, 2, True)
 
         t = threading.Thread(target=press_open)
         t.start()
@@ -339,6 +392,7 @@ class TestDaemonAskQuestion:
 
     def test_cancel(self, ask_question_request):
         daemon = _make_ready_daemon()
+        daemon._open_button = False  # Ensure Cancel, not Go CC
         item = self._make_ask_item(daemon, ask_question_request)
         daemon._add_item(item)
 
@@ -346,7 +400,8 @@ class TestDaemonAskQuestion:
 
         def interact():
             threading.Event().wait(0.3)
-            daemon._key_callback(None, 3, True)
+            # Key 2 = top-right (cancel_key)
+            daemon._key_callback(None, 2, True)
 
         t = threading.Thread(target=interact)
         t.start()
@@ -452,7 +507,7 @@ class TestDaemonAskQuestion:
             threading.Event().wait(0.2)
             daemon._key_callback(None, 5, True)  # Next
             threading.Event().wait(0.2)
-            daemon._key_callback(None, 3, True)  # Back
+            daemon._key_callback(None, 2, True)  # Back (top-right)
             threading.Event().wait(0.2)
             daemon._key_callback(None, 1, True)  # A2
             threading.Event().wait(0.2)
@@ -520,7 +575,7 @@ class TestDaemonAskQuestion:
             threading.Event().wait(0.2)
             daemon._key_callback(None, 1, True)  # Empty - ignored
             threading.Event().wait(0.2)
-            daemon._key_callback(None, 2, True)  # Empty - ignored
+            daemon._key_callback(None, 3, True)  # Empty - ignored
             threading.Event().wait(0.2)
             daemon._key_callback(None, 4, True)  # Empty - ignored
             threading.Event().wait(0.2)
@@ -541,6 +596,7 @@ class TestDaemonAskQuestion:
 
     def test_multi_page_cancel_on_first_page(self, ask_multi_question_request):
         daemon = _make_ready_daemon()
+        daemon._open_button = False  # Ensure Cancel, not Go CC
         item = self._make_ask_item(daemon, ask_multi_question_request)
         daemon._add_item(item)
 
@@ -548,7 +604,8 @@ class TestDaemonAskQuestion:
 
         def interact():
             threading.Event().wait(0.3)
-            daemon._key_callback(None, 3, True)
+            # Key 2 = top-right (cancel_key)
+            daemon._key_callback(None, 2, True)
 
         t = threading.Thread(target=interact)
         t.start()

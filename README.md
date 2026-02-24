@@ -123,6 +123,32 @@ cc-streamdeck-daemon --stop
 - **表示ガード**: 表示切替直後のボタン押下を無視する猶予時間（PermissionRequest/AskUserQuestion はデフォルト 500ms）
 - **自動終了**: Stream Deck が24時間接続されない場合、Daemon は自動終了
 
+### Go CC ボタン（macOS）
+
+macOS では全てのビューの右上キーに "Go CC" ボタンが表示される。押すと、そのリクエストを送った Claude Code が動いているターミナルにフォーカスを移し、Stream Deck の表示を閉じてターミナルでの操作にフォールバックする。Stream Deck では判断しづらい場面で、ソースコードを確認してから端末で直接応答したい場合に使う。
+
+内部的には `cc-streamdeck-focus` コマンドがプロセスツリーを辿ってターミナルアプリを特定し、3層のフォーカス処理を行う:
+
+1. **tmux ペイン選択** — tmux 内で実行中なら該当ペインを選択
+2. **TTY ベースのタブ選択** — ターミナルの複数タブから正しいタブを AppleScript / CLI で選択
+3. **アプリアクティベート** — ターミナルアプリを最前面に持ってくる
+
+#### 対応ターミナル
+
+| ターミナル | アプリ切替 | タブ選択 | 備考 |
+|-----------|:---------:|:-------:|------|
+| iTerm2 | o | o | AppleScript でタブ+セッション選択 |
+| Terminal.app | o | o | AppleScript でタブ選択 |
+| WezTerm | o | o | `wezterm cli` でペイン選択 |
+| Ghostty | o | x | AppleScript 辞書・CLI タブ操作 API が未提供のためタブ選択不可 |
+| Alacritty | o | - | 単一ウィンドウ設計のためタブ選択は不要 |
+| kitty | o | - | アプリ切替のみ（タブ選択は未実装） |
+| Claude Desktop | o | - | アプリ切替のみ |
+
+> **動作確認済み**: iTerm2, Terminal.app のみ。他のターミナルはコード上の対応であり、実機での動作確認は行っていない。
+
+> **Ghostty について**: Ghostty は 2025年5月時点で AppleScript 辞書を持たず、タブやペインを外部から操作する CLI/API も提供していない。App Intents に `TerminalEntity`（TTY/PID 取得）が追加される動きはあったが、外部呼び出し可能な形では実現していない。そのため現状ではアプリのアクティベート（最前面化）のみ対応し、正しいタブへの切替はできない。将来 Ghostty が外部 API を提供すれば対応可能。
+
 ### AskUserQuestion 対応
 
 Claude Code が AskUserQuestion ツールで選択肢を提示する際、Stream Deck のボタンに選択肢を直接表示し、ボタン押下で回答できる。選択肢のラベルと説明文がボタンに表示され、選択済みのボタンは色が変わる。複数の質問がある場合はページ送りで順に回答し、最後に確認ページで Submit する。

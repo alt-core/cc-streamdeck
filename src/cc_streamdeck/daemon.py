@@ -150,7 +150,7 @@ class Daemon:
         self._minor_guard_sec = self._settings.display_minor_guard_ms / 1000.0
         self._display_time: float = 0.0  # monotonic timestamp of last display switch
         self._guard_dim = self._settings.display_guard_dim
-        self._open_button = self._settings.display_open_button
+        self._open_button = sys.platform == "darwin"
         self._guard_timer: threading.Timer | None = None
 
     def start(self) -> None:
@@ -495,17 +495,6 @@ class Daemon:
             return self._minor_guard_sec
         return self._display_guard_sec
 
-    def _deny_key(self, grid_cols: int, grid_rows: int, item: _DisplayItem) -> int | None:
-        """Return the Deny key index for a permission item, or None."""
-        if item.item_type != "permission":
-            return None
-        num_choices = len(item.request.choices)
-        _, choice_keys = compute_layout(num_choices, grid_cols, grid_rows)
-        # choice_keys[1] is the Deny key (second in the list)
-        if len(choice_keys) >= 2:
-            return choice_keys[1]
-        return None
-
     @staticmethod
     def _focus_terminal(client_pid: int) -> None:
         """Focus the terminal running the given client PID (background thread)."""
@@ -539,8 +528,9 @@ class Daemon:
             return
         grid_cols, grid_rows = self._get_grid()
 
+        open_key = grid_cols - 1 if self._open_button else None
+
         if item.item_type == "notification":
-            open_key = (grid_rows - 1) * grid_cols if self._open_button else None
             images = render_notification(
                 item.notification_message, key_format,
                 bg_color=item.bg_color,
@@ -548,7 +538,6 @@ class Daemon:
                 open_key=open_key,
             )
         elif item.item_type == "fallback":
-            open_key = (grid_rows - 1) * grid_cols if self._open_button else None
             images = render_fallback_message(
                 item.request.tool_name, key_format,
                 bg_color=item.bg_color,
@@ -558,7 +547,6 @@ class Daemon:
         elif item.item_type == "ask":
             images = self._render_ask_page(item, key_format, grid_cols, grid_rows)
         else:  # permission
-            open_key = self._deny_key(grid_cols, grid_rows, item) if self._open_button else None
             images = render_permission_request(
                 item.request, key_format,
                 always_active=item.always_active,
@@ -607,10 +595,10 @@ class Daemon:
         is_multi_page = state.total_pages > 1
         use_open = self._open_button and state.current_page == 0
         if not is_multi_page:
-            cancel_or_open = {"open": "Open"} if use_open else {"cancel": "Cancel"}
+            cancel_or_open = {"open": "Go CC"} if use_open else {"cancel": "Cancel"}
             controls = {**cancel_or_open, "submit": "Submit"}
         elif state.current_page == 0:
-            cancel_or_open = {"open": "Open"} if use_open else {"cancel": "Cancel"}
+            cancel_or_open = {"open": "Go CC"} if use_open else {"cancel": "Cancel"}
             controls = {**cancel_or_open, "next": "Next"}
         else:
             controls = {"back": "Back", "next": "Next"}
@@ -650,19 +638,17 @@ class Daemon:
 
         if item.item_type == "notification":
             if self._open_button:
-                grid_cols, grid_rows = self._get_grid()
-                open_key = (grid_rows - 1) * grid_cols
-                if key == open_key:
-                    logger.info("Open pressed on notification (pid=%d)", item.client_pid)
+                grid_cols, _ = self._get_grid()
+                if key == grid_cols - 1:
+                    logger.info("Go CC pressed on notification (pid=%d)", item.client_pid)
                     self._focus_terminal(item.client_pid)
             self._remove_item(item)
             return
 
         if item.item_type == "fallback":
             if self._open_button:
-                grid_cols, grid_rows = self._get_grid()
-                open_key = (grid_rows - 1) * grid_cols
-                if key == open_key:
+                grid_cols, _ = self._get_grid()
+                if key == grid_cols - 1:
                     item.response = PermissionResponse(status="open")
                     if item.done_event is not None:
                         item.done_event.set()
@@ -688,15 +674,13 @@ class Daemon:
         grid_cols, grid_rows = self._get_grid()
         _, choice_keys = compute_layout(num_choices, grid_cols, grid_rows)
 
-        # Open button: Deny key replaced with Open when display.open_button is set
-        if self._open_button:
-            deny_key = self._deny_key(grid_cols, grid_rows, item)
-            if deny_key is not None and key == deny_key:
-                item.response = PermissionResponse(status="open")
-                if item.done_event is not None:
-                    item.done_event.set()
-                self._remove_item(item)
-                return
+        # Go CC button: top-right key focuses terminal
+        if self._open_button and key == grid_cols - 1:
+            item.response = PermissionResponse(status="open")
+            if item.done_event is not None:
+                item.done_event.set()
+            self._remove_item(item)
+            return
 
         if key not in choice_keys:
             return
@@ -736,7 +720,7 @@ class Daemon:
         grid_cols, grid_rows = self._get_grid()
         total_keys = grid_cols * grid_rows
         submit_key = total_keys - 1
-        cancel_key = total_keys - grid_cols
+        cancel_key = grid_cols - 1  # top-right
 
         if state.is_confirm_page:
             if key == submit_key:
