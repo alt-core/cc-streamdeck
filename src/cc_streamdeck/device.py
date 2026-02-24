@@ -88,13 +88,21 @@ class DeviceState:
         self._close_device(reset=True)
 
     def set_key_images(self, images: dict[int, bytes]) -> None:
-        """Set images on the device. Thread-safe."""
+        """Set images on the device. Thread-safe.
+
+        On HID error, closes the device and sets status to "no_device"
+        so the poll loop can attempt reconnection.
+        """
         with self._lock:
             if self._deck is None:
                 return
-            with self._deck:
-                for key, img_bytes in images.items():
-                    self._deck.set_key_image(key, img_bytes)
+            try:
+                with self._deck:
+                    for key, img_bytes in images.items():
+                        self._deck.set_key_image(key, img_bytes)
+            except Exception as e:
+                logger.info("HID write failed, closing device: %s", e)
+                self._close_device_locked()
 
     def get_key_image_format(self) -> dict | None:
         """Return the key image format dict, or None if no device."""
@@ -116,7 +124,11 @@ class DeviceState:
         with self._lock:
             if self._deck is None:
                 return
-            self._clear_all_keys(self._deck)
+            try:
+                self._clear_all_keys(self._deck)
+            except Exception as e:
+                logger.info("HID write failed during clear, closing device: %s", e)
+                self._close_device_locked()
 
     @property
     def no_device_elapsed(self) -> float:
@@ -177,13 +189,17 @@ class DeviceState:
 
     def _close_device(self, reset: bool = False) -> None:
         with self._lock:
-            if self._deck is not None:
-                try:
-                    if reset:
-                        self._deck.reset()
-                    self._deck.close()
-                except Exception:
-                    pass
-                self._deck = None
-            self._status = "no_device"
-            self._no_device_since = time.monotonic()
+            self._close_device_locked(reset=reset)
+
+    def _close_device_locked(self, reset: bool = False) -> None:
+        """Close the device. Caller must hold self._lock."""
+        if self._deck is not None:
+            try:
+                if reset:
+                    self._deck.reset()
+                self._deck.close()
+            except Exception:
+                pass
+            self._deck = None
+        self._status = "no_device"
+        self._no_device_since = time.monotonic()
