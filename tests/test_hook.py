@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from cc_streamdeck.hook import (
     _send_notification,
+    _send_stop_hook,
     build_ask_question_output,
     build_hook_output,
     build_request,
@@ -162,3 +163,32 @@ class TestSendNotification:
         """When no daemon is running, _send_notification returns without error."""
         with patch("cc_streamdeck.hook._try_connect", return_value=None):
             _send_notification({"notification_type": "idle_prompt", "message": "hi"})
+
+
+class TestSendStopHook:
+    def test_sends_stop_hook_message(self):
+        """_send_stop_hook sends type=stop_hook with client_pid."""
+        import json
+        import socket
+
+        server, client = socket.socketpair()
+        with patch("cc_streamdeck.hook._try_connect", return_value=client):
+            with patch("cc_streamdeck.hook.os.getppid", return_value=42000):
+                _send_stop_hook()
+
+        data = b""
+        while True:
+            chunk = server.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        server.close()
+
+        msg = json.loads(data.decode("utf-8").strip())
+        assert msg["type"] == "stop_hook"
+        assert msg["client_pid"] == 42000
+
+    def test_no_daemon_silently_returns(self):
+        """When no daemon is running, _send_stop_hook returns without error."""
+        with patch("cc_streamdeck.hook._try_connect", return_value=None):
+            _send_stop_hook()

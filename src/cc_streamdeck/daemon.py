@@ -19,9 +19,9 @@ from .device import DeviceState
 from .protocol import (
     NotificationMessage,
     PermissionResponse,
-    decode_notification,
-    decode_request,
     encode,
+    notification_from_dict,
+    request_from_dict,
 )
 from .renderer import (
     compute_layout,
@@ -256,7 +256,6 @@ class Daemon:
             if not data:
                 return
 
-            # Check for stop command
             import json
 
             try:
@@ -264,16 +263,20 @@ class Daemon:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 logger.info("JSON parse failed, ignoring")
                 return
-            if msg.get("type") == "stop":
+
+            msg_type = msg.get("type")
+            if msg_type == "stop":
                 logger.info("Received stop command via socket")
                 self.shutdown()
                 return
-
-            if msg.get("type") == "notification":
-                self._handle_notification(decode_notification(data))
+            if msg_type == "notification":
+                self._handle_notification(notification_from_dict(msg))
+                return
+            if msg_type == "stop_hook":
+                self._handle_stop_hook(msg.get("client_pid", 0))
                 return
 
-            request = decode_request(data)
+            request = request_from_dict(msg)
             logger.info(
                 "Processing request for tool: %s (pid=%d)", request.tool_name, request.client_pid
             )
@@ -352,11 +355,6 @@ class Daemon:
             )
             self._next_id += 1
 
-            # Fallback (ExitPlanMode) signals the instance moved on;
-            # purge any stale connected items from the same PID.
-            if item_type == "fallback":
-                self._purge_connected_items(request.client_pid)
-
             self._add_item(item)
 
             # Wait for resolution
@@ -377,19 +375,12 @@ class Daemon:
     def _handle_notification(self, msg: NotificationMessage) -> None:
         """Handle a low-priority notification (fire-and-forget, no response).
 
-        Also purges any stale connected items (permission, ask, fallback) from
-        the same PID.  Claude Code does not kill old hook processes after a
-        terminal-side response (bug #15433), so receiving a notification from
-        an instance is a reliable signal that it is idle and any remaining
-        connected items are stale.
+        Stale same-PID items are automatically superseded by _add_item().
         """
         enabled = self._settings.notification_types
         if enabled and msg.notification_type not in enabled:
             logger.info("Ignoring notification type: %s", msg.notification_type)
             return
-
-        # Purge stale connected items from the same PID
-        self._purge_connected_items(msg.client_pid)
 
         palette_idx = instance_palette_index(msg.client_pid, self._seen_pids)
         palette = self._risk_config.instance_palette
@@ -413,31 +404,82 @@ class Daemon:
             "Notification stored: %s (pid=%d)", msg.notification_type, msg.client_pid
         )
 
+    def _handle_stop_hook(self, client_pid: int) -> None:
+        """Handle a Stop hook signal: purge stale items + optional Done notification.
+
+        The Stop hook fires every time Claude finishes responding. At that point
+        no pending PermissionRequests should exist, so connected items are stale.
+        """
+        if not client_pid:
+            return
+
+        # Show "Done" notification if enabled
+        enabled = self._settings.notification_types
+        if enabled and "stop" not in enabled:
+            # No Done notification — purge stale items explicitly
+            # (when enabled, _add_item() supersedes them automatically)
+            self._purge_connected_items(client_pid)
+            logger.info("Stop hook: purged only (stop notification disabled), pid=%d", client_pid)
+            return
+
+        palette_idx = instance_palette_index(client_pid, self._seen_pids)
+        palette = self._risk_config.instance_palette
+        bg_color = palette[palette_idx % len(palette)]
+
+        item = _DisplayItem(
+            id=self._next_id,
+            priority=PRIORITY_LOW,
+            timestamp=time.monotonic(),
+            client_pid=client_pid,
+            item_type="notification",
+            notification_message="Done",
+            bg_color=bg_color,
+            done_event=None,
+        )
+        self._next_id += 1
+
+        self._add_item(item)
+        logger.info("Stop hook: Done notification for pid=%d", client_pid)
+
     # -- Unified display queue --
 
     def _add_item(self, item: _DisplayItem) -> None:
         """Add item to the queue.
 
-        Notifications supersede same-PID notifications (only one notification
-        per instance). Connected items (permission, ask, fallback) coexist
-        even from the same PID to support parallel sub-agents.
+        Same-PID supersede: the latest hook from an instance replaces all
+        previous items from that instance.  Exception: permission items do
+        not supersede other permission items (parallel sub-agents).
         """
         with self._items_lock:
-            if item.client_pid and item.item_type == "notification":
-                old = [
-                    i for i in self._items
-                    if i.client_pid == item.client_pid and i.item_type == "notification"
-                ]
+            if item.client_pid:
+                if item.item_type == "permission":
+                    # Permissions coexist with other permissions
+                    old = [
+                        i for i in self._items
+                        if i.client_pid == item.client_pid
+                        and i.item_type != "permission"
+                    ]
+                else:
+                    # Everything else supersedes all same-PID items
+                    old = [
+                        i for i in self._items
+                        if i.client_pid == item.client_pid
+                    ]
                 for o in old:
                     self._items.remove(o)
+                    if o.done_event is not None:
+                        o.response = PermissionResponse(
+                            status="error", error_message="Superseded"
+                        )
+                        o.done_event.set()
             self._items.append(item)
         self._select_and_display()
 
     def _purge_connected_items(self, client_pid: int) -> None:
         """Remove all connected items (permission, ask, fallback) for a PID.
 
-        Called when a notification arrives, signalling the instance is idle
-        and any remaining connected items are stale (CC bug #15433).
+        Used by _handle_stop_hook() when Done notification is disabled
+        (i.e. _add_item() won't be called to trigger supersede).
         """
         with self._items_lock:
             stale = [

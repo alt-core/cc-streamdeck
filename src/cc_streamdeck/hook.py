@@ -1,7 +1,7 @@
-"""Hook Client: invoked by Claude Code's PermissionRequest / Notification hook.
+"""Hook Client: invoked by Claude Code's PermissionRequest / Notification / Stop hook.
 
 Reads JSON from stdin, communicates with the Daemon via Unix socket,
-and writes the response JSON to stdout. Notification hooks are
+and writes the response JSON to stdout. Notification and Stop hooks are
 fire-and-forget (no stdout). Falls back to terminal prompt on any
 error (exit 0 with no output).
 """
@@ -205,6 +205,27 @@ def _send_notification(hook_input: dict) -> None:
         sock.close()
 
 
+def _send_stop_hook() -> None:
+    """Send a Stop hook signal to the daemon (fire-and-forget).
+
+    Triggers stale items purge and optional Done notification.
+    Does not auto-start the daemon.
+    """
+    msg = json.dumps({"type": "stop_hook", "client_pid": os.getppid()}) + "\n"
+    _log("Sending stop_hook")
+    sock = _try_connect()
+    if sock is None:
+        _log("No daemon running, skipping stop_hook")
+        return
+    try:
+        sock.sendall(msg.encode("utf-8"))
+        sock.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+
 def _focus_terminal(client_pid: int) -> None:
     """Attempt to focus the terminal running Claude Code."""
     import shutil
@@ -238,6 +259,11 @@ def main() -> None:
         # Notification hook: fire-and-forget, no response needed
         if hook_input.get("hook_event_name") == "Notification":
             _send_notification(hook_input)
+            sys.exit(0)
+
+        # Stop hook: purge stale items + optional Done notification
+        if hook_input.get("hook_event_name") == "Stop":
+            _send_stop_hook()
             sys.exit(0)
 
         request = build_request(hook_input)

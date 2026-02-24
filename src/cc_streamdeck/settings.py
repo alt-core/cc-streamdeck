@@ -37,7 +37,7 @@ class UserSettings:
     path_high: list[str] = field(default_factory=list)
     # Notification types to display (empty = all enabled)
     notification_types: list[str] = field(
-        default_factory=lambda: ["idle_prompt", "auth_success", "elicitation_dialog"]
+        default_factory=lambda: ["idle_prompt", "auth_success", "elicitation_dialog", "stop"]
     )
     # Guard time in ms before accepting button presses after display switch
     # PermissionRequest / AskUserQuestion (default 500ms)

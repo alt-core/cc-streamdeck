@@ -772,8 +772,8 @@ class TestDaemonUnifiedQueue:
         assert daemon._current_item is not None
         assert daemon._current_item.item_type == "notification"
 
-    def test_same_pid_notification_coexists_with_high(self):
-        """HIGH request from same PID coexists with its notification."""
+    def test_permission_supersedes_same_pid_notification(self):
+        """Permission supersedes notification from same PID."""
         import time
 
         from cc_streamdeck.protocol import NotificationMessage, PermissionChoice, PermissionRequest
@@ -786,7 +786,7 @@ class TestDaemonUnifiedQueue:
         daemon._handle_notification(msg)
         assert daemon._current_item.item_type == "notification"
 
-        # HIGH from same PID
+        # Permission from same PID supersedes notification
         req = PermissionRequest(
             tool_name="Bash",
             tool_input={"command": "ls"},
@@ -800,11 +800,9 @@ class TestDaemonUnifiedQueue:
         high.timestamp = time.monotonic()
         daemon._add_item(high)
 
-        # HIGH displayed, notification still in queue
+        # Permission displayed, notification superseded
         assert daemon._current_item is high
-        assert len(daemon._items) == 2
-        notif_items = [i for i in daemon._items if i.item_type == "notification"]
-        assert len(notif_items) == 1
+        assert len(daemon._items) == 1
 
     def test_disabled_notification_type_ignored(self):
         """Notification with disabled type is not added."""
@@ -1023,8 +1021,8 @@ class TestDisplayGuard:
 class TestNotificationPurge:
     """Tests for notification-triggered cleanup of stale connected items."""
 
-    def test_notification_purges_stale_permission(self, sample_request):
-        """Notification purges stale permission items from the same PID."""
+    def test_notification_supersedes_stale_permission(self, sample_request):
+        """Notification supersedes stale permission items from the same PID."""
         from cc_streamdeck.protocol import NotificationMessage
 
         daemon = _make_ready_daemon()
@@ -1037,15 +1035,15 @@ class TestNotificationPurge:
         )
         daemon._handle_notification(msg)
 
-        # Permission item purged, notification displayed
+        # Permission item superseded, notification displayed
         assert item not in daemon._items
         assert item.done_event.is_set()
         assert item.response.status == "error"
-        assert "purged" in item.response.error_message.lower()
+        assert "superseded" in item.response.error_message.lower()
         assert daemon._current_item.item_type == "notification"
 
-    def test_notification_purges_stale_fallback(self, exit_plan_mode_request):
-        """Notification purges stale fallback items from the same PID."""
+    def test_notification_supersedes_stale_fallback(self, exit_plan_mode_request):
+        """Notification supersedes stale fallback items from the same PID."""
         from cc_streamdeck.protocol import NotificationMessage
 
         daemon = _make_ready_daemon()
@@ -1063,8 +1061,8 @@ class TestNotificationPurge:
         assert item not in daemon._items
         assert item.done_event.is_set()
 
-    def test_notification_purges_multiple_stale_items(self, sample_request):
-        """Notification purges all stale connected items from the same PID."""
+    def test_notification_supersedes_multiple_stale_items(self, sample_request):
+        """Notification supersedes all stale items from the same PID."""
         import time
 
         from cc_streamdeck.protocol import NotificationMessage
@@ -1086,7 +1084,7 @@ class TestNotificationPurge:
         )
         daemon._handle_notification(msg)
 
-        # All permission items purged
+        # All permission items superseded
         for item in items:
             assert item not in daemon._items
             assert item.done_event.is_set()
@@ -1095,7 +1093,7 @@ class TestNotificationPurge:
         assert len(daemon._items) == 1
         assert daemon._current_item.item_type == "notification"
 
-    def test_notification_does_not_purge_other_pid(self, sample_request):
+    def test_notification_does_not_supersede_other_pid(self, sample_request):
         """Notification does not affect items from a different PID."""
         import time
 
@@ -1121,8 +1119,8 @@ class TestNotificationPurge:
         assert item_2000 in daemon._items
         assert not item_2000.done_event.is_set()
 
-    def test_disabled_notification_does_not_purge(self, sample_request):
-        """Disabled notification type does not trigger purge."""
+    def test_disabled_notification_does_not_supersede(self, sample_request):
+        """Disabled notification type does not trigger supersede."""
         from cc_streamdeck.protocol import NotificationMessage
 
         daemon = _make_ready_daemon()
@@ -1140,8 +1138,8 @@ class TestNotificationPurge:
         assert item in daemon._items
         assert not item.done_event.is_set()
 
-    def test_fallback_purges_stale_permissions(self, sample_request, exit_plan_mode_request):
-        """ExitPlanMode (fallback) purges stale permission items from same PID."""
+    def test_fallback_supersedes_same_pid(self, sample_request, exit_plan_mode_request):
+        """ExitPlanMode (fallback) supersedes all same-PID items."""
         import time
 
         daemon = _make_ready_daemon()
@@ -1157,10 +1155,8 @@ class TestNotificationPurge:
 
         assert len(daemon._items) == 2
 
-        # ExitPlanMode arrives from same PID — handled via _handle_connection
-        # but we can test _purge + _add directly
+        # ExitPlanMode arrives from same PID — _add_item supersedes
         exit_plan_mode_request.client_pid = 1000
-        daemon._purge_connected_items(1000)
         fb_item = _make_item(
             daemon, exit_plan_mode_request,
             item_type="fallback", priority=PRIORITY_MEDIUM, client_pid=1000,
@@ -1168,7 +1164,7 @@ class TestNotificationPurge:
         fb_item.timestamp = time.monotonic()
         daemon._add_item(fb_item)
 
-        # Permission items purged
+        # Permission items superseded
         assert item_a not in daemon._items
         assert item_a.done_event.is_set()
         assert item_b not in daemon._items
@@ -1178,8 +1174,8 @@ class TestNotificationPurge:
         assert fb_item in daemon._items
         assert daemon._current_item is fb_item
 
-    def test_fallback_does_not_purge_other_pid(self, sample_request, exit_plan_mode_request):
-        """ExitPlanMode does not purge items from different PID."""
+    def test_fallback_does_not_supersede_other_pid(self, sample_request, exit_plan_mode_request):
+        """ExitPlanMode does not supersede items from different PID."""
         import time
 
         daemon = _make_ready_daemon()
@@ -1189,7 +1185,6 @@ class TestNotificationPurge:
         daemon._add_item(item_2000)
 
         exit_plan_mode_request.client_pid = 1000
-        daemon._purge_connected_items(1000)
         fb_item = _make_item(
             daemon, exit_plan_mode_request,
             item_type="fallback", priority=PRIORITY_MEDIUM, client_pid=1000,
@@ -1200,6 +1195,69 @@ class TestNotificationPurge:
         # PID 2000 item untouched
         assert item_2000 in daemon._items
         assert not item_2000.done_event.is_set()
+
+    def test_stop_hook_purges_stale_items(self, sample_request):
+        """Stop hook purges stale connected items from same PID."""
+        import time
+
+        daemon = _make_ready_daemon()
+        item = _make_item(daemon, sample_request, client_pid=1000)
+        item.timestamp = time.monotonic()
+        daemon._add_item(item)
+
+        daemon._handle_stop_hook(1000)
+
+        assert item not in daemon._items
+        assert item.done_event.is_set()
+        # Done notification displayed (default: "stop" enabled)
+        assert daemon._current_item is not None
+        assert daemon._current_item.item_type == "notification"
+        assert daemon._current_item.notification_message == "Done"
+
+    def test_stop_hook_shows_done_notification(self):
+        """Stop hook shows Done notification when 'stop' is in notification_types."""
+        daemon = _make_ready_daemon()
+        daemon._settings.notification_types = ["stop"]
+
+        daemon._handle_stop_hook(1000)
+
+        assert daemon._current_item is not None
+        assert daemon._current_item.item_type == "notification"
+        assert daemon._current_item.notification_message == "Done"
+        assert daemon._current_item.client_pid == 1000
+
+    def test_stop_hook_no_notification_when_disabled(self, sample_request):
+        """Stop hook still purges but skips Done notification when 'stop' not in types."""
+        import time
+
+        daemon = _make_ready_daemon()
+        daemon._settings.notification_types = ["idle_prompt"]
+
+        item = _make_item(daemon, sample_request, client_pid=1000)
+        item.timestamp = time.monotonic()
+        daemon._add_item(item)
+
+        daemon._handle_stop_hook(1000)
+
+        # Purge happened
+        assert item not in daemon._items
+        assert item.done_event.is_set()
+        # No Done notification
+        assert daemon._current_item is None
+
+    def test_stop_hook_does_not_affect_other_pid(self, sample_request):
+        """Stop hook does not affect items from different PID."""
+        import time
+
+        daemon = _make_ready_daemon()
+        item = _make_item(daemon, sample_request, client_pid=2000)
+        item.timestamp = time.monotonic()
+        daemon._add_item(item)
+
+        daemon._handle_stop_hook(1000)
+
+        assert item in daemon._items
+        assert not item.done_event.is_set()
 
 
 class TestParallelSubAgents:

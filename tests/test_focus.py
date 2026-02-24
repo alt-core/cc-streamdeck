@@ -184,6 +184,28 @@ class TestActivateApp:
         assert not _activate_app("Terminal")
 
 
+class TestSanitizeTty:
+    def test_normal_tty_unchanged(self):
+        from cc_streamdeck.focus import _sanitize_tty
+
+        assert _sanitize_tty("ttys001") == "ttys001"
+
+    def test_strips_quotes(self):
+        from cc_streamdeck.focus import _sanitize_tty
+
+        assert _sanitize_tty('tty"injection') == "ttyinjection"
+
+    def test_strips_backslashes(self):
+        from cc_streamdeck.focus import _sanitize_tty
+
+        assert _sanitize_tty("tty\\s001") == "ttys001"
+
+    def test_empty_after_sanitize_blocks_tab_focus(self):
+        from cc_streamdeck.focus import _try_tab_focus
+
+        assert not _try_tab_focus("iTerm2", '"\\"')
+
+
 class TestTerminalAppsMapping:
     def test_all_common_terminals_present(self):
         expected = {"Terminal", "iTerm2", "Ghostty", "WezTerm", "Claude"}

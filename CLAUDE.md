@@ -10,7 +10,7 @@ cc_streamdeck は、Claude Code の権限確認プロンプト（Allow/Deny/Alwa
 
 ```
 Claude Code
-  ↓ PermissionRequest / Notification Hook (stdin: JSON)
+  ↓ PermissionRequest / Notification / Stop Hook (stdin: JSON)
 Hook Client (cc-streamdeck-hook, 短命プロセス)
   ↓ Unix domain socket (/tmp/cc_streamdeck.sock)
 Stream Deck Daemon (cc-streamdeck-daemon, 常駐プロセス)
@@ -30,8 +30,8 @@ Claude Code へ結果返却
 - `src/cc_streamdeck/risk.py` — リスク評価エンジン。4段階（critical/high/medium/low）、Bashパターンマッチ、パス引き上げ、インスタンスパレット管理
 - `src/cc_streamdeck/renderer.py` — PIL画像生成。動的グリッドレイアウト計算、フォントフォールバック、メッセージ合成画像のタイル分割、選択肢ラベル描画、AskUserQuestion全面ボタン描画（ラベル+description）、フォールバックメッセージ表示、Notification表示（最下段のみ）。ヘッダ背景色（リスク）・ボディ背景色（インスタンス）パラメータ対応
 - `src/cc_streamdeck/device.py` — DeviceState: Stream Deck接続管理、ホットプラグポーリング（3秒間隔）、スレッドセーフな画像設定、`get_grid_layout()` でデバイスのグリッドサイズ取得、24時間未接続で自動終了。Mini Discord Edition (PID 0x00B3) のパッチ含む
-- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、統一キュー（`_items`）による表示管理。`_DisplayItem` で全種別を統一、`_select_and_display()` で表示判定。`_add_item`（同一PID上書き）、`_remove_item`（除去+再計算）、`_wait_for_resolution`（per-item `done_event` で接続スレッドがブロック）。`_key_callback` → `_handle_permission_key`/`_handle_ask_key` で種別ごとのボタン処理。`_AskQuestionState` でページ遷移・回答管理。設定読み込み
-- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。Notification hookはfire-and-forget（応答不要）。エラー時はexit 0でフォールバック。`status="open"` 時は `cc-streamdeck-focus` を呼んでターミナルにフォーカス
+- `src/cc_streamdeck/daemon.py` — Daemon本体: Unixソケットサーバ、統一キュー（`_items`）による表示管理。`_DisplayItem` で全種別を統一、`_select_and_display()` で表示判定。`_add_item`（notification上書き）、`_remove_item`（除去+再計算）、`_purge_connected_items`（stale items 一括削除）、`_wait_for_resolution`（per-item `done_event` で接続スレッドがブロック）。`_key_callback` → `_handle_permission_key`/`_handle_ask_key` で種別ごとのボタン処理。`_handle_stop_hook` で Stop hook 処理（パージ + Done 通知）。`_AskQuestionState` でページ遷移・回答管理。設定読み込み
+- `src/cc_streamdeck/hook.py` — Hook Client: stdin JSON→Daemon通信→stdout JSON。Daemon自動起動（sys.executable親ディレクトリからパス解決）。AskUserQuestion時は`updatedInput.answers`で回答返却。Notification/Stop hookはfire-and-forget（応答不要、daemon未起動時はスキップ）。エラー時はexit 0でフォールバック。`status="open"` 時は `cc-streamdeck-focus` を呼んでターミナルにフォーカス
 - `src/cc_streamdeck/focus.py` — ターミナルフォーカスコマンド（cc-streamdeck-focus）。PIDからプロセスツリーを辿ってターミナルアプリを特定し、tmuxペイン選択→TTYベースのタブ選択→アプリアクティベートの3層でフォーカス。macOS専用、標準ライブラリのみ
 - `src/cc_streamdeck/fonts/` — M PLUS 1 Code (SIL OFL, AA描画用), PixelMplus10 (M+ FONT LICENSE, dot-by-dot用)
 
@@ -154,6 +154,15 @@ Claude Code の **PermissionRequest** hook を使用。権限確認ダイアロ�
 }
 ```
 
+### Hook連携: Stop
+
+Claude Code の **Stop** hook を使用。Claude のレスポンスが終わりユーザー入力待ちになるたびに発火する。
+
+1. **Done 通知表示**: `"stop"` が `notification_types` に含まれていれば、Notification と同形式で "Done" メッセージを `_add_item()` で投入。同一PIDの既存アイテムは supersede で自動除去
+2. **Done 通知 disabled 時**: `_purge_connected_items()` で同一PIDの stale items を明示的にパージ
+
+fire-and-forget（stdout 不要）。daemon 未起動時はスキップ（自動起動しない）。`_handle_stop_hook()` で処理。
+
 ### AskUserQuestion（インタラクティブUI）
 
 AskUserQuestion は Stream Deck 上で選択肢を直接表示し、ボタン押下で回答する（注: PermissionRequest 発火はバグ #15400、将来修正される可能性あり）。hook は `updatedInput.answers` で回答を返す。
@@ -193,18 +202,17 @@ ExitPlanMode など、hook の `allow`/`deny` では適切にハンドリング�
 **`_DisplayItem`**: 全種別を統一するデータクラス。priority, timestamp, client_pid, item_type, request, done_event, response, always_active, ask_state 等を保持。
 
 **主要メソッド:**
-- `_add_item(item)`: リストに追加。notification の場合のみ同一PIDの既存 notification を除去。connected items（permission, ask, fallback）は同一PIDでも共存（並行サブエージェント対応）。`_select_and_display()` を呼ぶ
+- `_add_item(item)`: リストに追加。同一PIDの既存アイテムを supersede（上書き）する。**例外**: permission は同一PIDの他の permission を supersede しない（並行サブエージェント対応）。`_select_and_display()` を呼ぶ
 - `_remove_item(item)`: リストから除去。`_select_and_display()` を呼ぶ
-- `_purge_connected_items(pid)`: 指定PIDの connected items（permission, ask, fallback）を全除去。`done_event` をエラーで起こし、接続スレッドに通知
+- `_purge_connected_items(pid)`: 指定PIDの connected items（permission, ask, fallback）を全除去。`done_event` をエラーで起こし、接続スレッドに通知。Stop hook で Done 通知が disabled の場合に使用
 - `_select_and_display()`: `max(self._items, key=lambda i: (i.priority, i.timestamp))` で最優先アイテムを選択し、表示が変わった場合のみ `_render_item()` を呼ぶ。ガード時間がある場合は `guard_active=True` でレンダリングし、タイマーで期限後に `guard_active=False` で再レンダリング
 - `_wait_for_resolution(item, conn)`: 接続ハンドラスレッドが per-item `done_event` を1秒ポーリングで待機。client 切断検出時は `_remove_item()` で除去
 - `_render_item(item, guard_active)`: item_type に応じて適切な renderer を呼ぶ。permission 時は `guard_active` を `render_permission_request()` に渡す
 - `_guard_for_item(item)`: アイテム種別に応じて `_display_guard_sec`（permission/ask）または `_minor_guard_sec`（fallback/notification）を返す
 
 **動作:**
-- **同一PID共存**: connected items（permission, ask, fallback）は同一PIDでも共存する。WebSearch 等のサブエージェントが並行して hook を投げるため、同一PIDからの PermissionRequest が同時に複数届くことがある。各アイテムは独立した `done_event` を持ち、ボタン押下・切断で個別に解決される
-- **同一PID notification 上書き**: notification のみ同一PIDの既存 notification を自動除去（1インスタンス1通知）
-- **stale items パージ**: CC はターミナル側で応答済みの hook プロセスを kill しない（バグ #15433）。そのため daemon 側に stale な connected items が残留する。パージのトリガーは idle_prompt（Notification hook）と ExitPlanMode（PermissionRequest hook）の受信。いずれも CC がユーザー入力を待っている状態で発火するため、その時点で同一PIDの未解決 PermissionRequest は存在しないはず。`_purge_connected_items()` で同一PIDの connected items を全削除し、残っていた hook 接続スレッドにエラー応答を返す
+- **同一PID supersede**: 同一PIDからの新しい hook は既存アイテムを supersede する（最新のもののみ有効）。**例外**: permission 同士は supersede せず蓄積する（WebSearch 等のサブエージェントが並行して hook を投げるため）。各アイテムは独立した `done_event` を持ち、ボタン押下・切断で個別に解決される
+- **stale items cleanup**: CC はターミナル側で応答済みの hook プロセスを kill しない（バグ #15433）。notification, fallback, Stop hook の Done 通知が `_add_item()` で追加されると、同一PIDの全アイテム（permission 含む）が自動的に supersede される。Stop hook で Done 通知が disabled の場合は `_purge_connected_items()` で明示的にパージ
 - **プリエンプション**: 新しいアイテムが来ると `_select_and_display()` が最優先・最新を選択。古いアイテムはリストに残り、新しいものが解決されると自動的に再表示される
 - **Notification**: LOW として `_items` に投入。HIGH/MEDIUM 表示中は選択されないだけ。解決後に自然に表示される
 - **`_items_lock`**: 短命ロック（リスト操作と `_current_item` 更新のみ保護）。長期保持なし
@@ -220,15 +228,15 @@ Mini 3x2:
 ```
 
 - `render_notification()`: 最下段を横長キャンバスとしてレンダリング。フォントは16px→10pxの自動選択
-- `_handle_notification()`: stale items パージ後、`_DisplayItem(priority=LOW)` として `_add_item()` に投入
-- 設定ファイル `[notification] types = [...]` で表示する notification_type を選択可能（disabled な type は無視され、パージも行わない）
+- `_handle_notification()`: `_DisplayItem(priority=LOW)` として `_add_item()` に投入。同一PIDの既存アイテムは `_add_item()` の supersede で自動除去
+- 設定ファイル `[notification] types = [...]` で表示する notification_type を選択可能（disabled な type は無視される）
 - OK ボタン押下で dismiss（`_remove_item()` → 次のアイテムへ）
 
 ### PPIDベースの同一インスタンス識別
 
 hook が `os.getppid()` を `client_pid` として daemon に送信。同一 PID = 同一 Claude Code インスタンス。
 
-**並行リクエストと stale items**: WebSearch 等のサブエージェントは並行して PermissionRequest hook を投げるため、同一PIDから複数のリクエストが同時に届く。これらは `_items` 内で共存する。一方、CC はターミナル側で応答済みの hook プロセスを kill しない（既知のバグ: GitHub #15433）ため、stale な connected items が daemon 側に残留する。cleanup は idle_prompt（Notification）または ExitPlanMode の受信をトリガーとする。これらは CC がユーザー入力待ちの状態で発火するため、同一PIDの未解決 PermissionRequest は存在しないはずであり、安全にパージできる。
+**同一PID supersede と並行サブエージェント**: `_add_item()` は同一PIDの既存アイテムを supersede する。ただし permission は他の permission を supersede しない（並行サブエージェント対応）。CC はターミナル側で応答済みの hook プロセスを kill しない（既知のバグ: GitHub #15433）ため、stale な items が残留するが、notification, fallback, Stop hook Done 通知の追加時に自動的に supersede される。
 
 ### Daemon自動起動とデバイス状態管理
 
@@ -290,7 +298,7 @@ uv run cc-streamdeck-focus <pid>     # ターミナルフォーカス（手動�
 - Alwaysは安全のためトグル式（誤タップ防止）。非アクティブ時はグレー文字
 - Hook Client は高速起動・応答が必須（Claude Code がブロックされるため）
 - あらゆるエラーで exit 0（出力なし）→ 端末フォールバック（ユーザーがスタックしない）
-- 同一PIDからの新しいリクエストは `_add_item()` で古いものを自動上書き（supersede）
+- 同一PIDからの新しい hook は `_add_item()` で古いアイテムを supersede。ただし permission 同士は蓄積（並行サブエージェント対応）
 - リスク評価: low は確実にread-onlyな操作のみ。誤判定の余地があるものはmedium以上。未知コマンドはmedium
 - 設定ファイルのユーザーパターンはbuilt-inに加算（上書きではない、安全性のため）
 - AskUserQuestion は Stream Deck 上で直接回答（`updatedInput.answers` で返却）。ExitPlanMode はフォールバック表示でターミナルに誘導

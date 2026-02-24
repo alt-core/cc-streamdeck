@@ -180,9 +180,18 @@ def _try_tmux_focus(client_pid: int) -> tuple[str, str] | None:
     return None
 
 
+def _sanitize_tty(tty: str) -> str:
+    """Remove characters that could break AppleScript string literals."""
+    return tty.replace("\\", "").replace('"', "")
+
+
 def _try_tab_focus(app_name: str, tty: str) -> bool:
     """Try to select the terminal tab containing the given TTY. Returns True if successful."""
     if not tty or tty == "??":
+        return False
+
+    tty = _sanitize_tty(tty)
+    if not tty:
         return False
 
     if app_name == "iTerm2":

@@ -56,9 +56,8 @@ def encode(msg: PermissionRequest | PermissionResponse | NotificationMessage) ->
     return (json.dumps(asdict(msg), ensure_ascii=False) + "\n").encode("utf-8")
 
 
-def decode_request(data: bytes) -> PermissionRequest:
-    """Deserialize NDJSON bytes to a PermissionRequest."""
-    obj = json.loads(data.decode("utf-8").strip())
+def request_from_dict(obj: dict) -> PermissionRequest:
+    """Build a PermissionRequest from a parsed dict."""
     choices = [PermissionChoice(**c) for c in obj.get("choices", [])]
     return PermissionRequest(
         tool_name=obj.get("tool_name", ""),
@@ -70,9 +69,8 @@ def decode_request(data: bytes) -> PermissionRequest:
     )
 
 
-def decode_notification(data: bytes) -> NotificationMessage:
-    """Deserialize NDJSON bytes to a NotificationMessage."""
-    obj = json.loads(data.decode("utf-8").strip())
+def notification_from_dict(obj: dict) -> NotificationMessage:
+    """Build a NotificationMessage from a parsed dict."""
     return NotificationMessage(
         notification_type=obj.get("notification_type", ""),
         message=obj.get("message", ""),
@@ -80,6 +78,16 @@ def decode_notification(data: bytes) -> NotificationMessage:
         client_pid=obj.get("client_pid", 0),
         type=obj.get("type", "notification"),
     )
+
+
+def decode_request(data: bytes) -> PermissionRequest:
+    """Deserialize NDJSON bytes to a PermissionRequest."""
+    return request_from_dict(json.loads(data.decode("utf-8").strip()))
+
+
+def decode_notification(data: bytes) -> NotificationMessage:
+    """Deserialize NDJSON bytes to a NotificationMessage."""
+    return notification_from_dict(json.loads(data.decode("utf-8").strip()))
 
 
 def decode_response(data: bytes) -> PermissionResponse:

@@ -159,6 +159,7 @@ class TestParseNotification:
         assert "idle_prompt" in settings.notification_types
         assert "auth_success" in settings.notification_types
         assert "elicitation_dialog" in settings.notification_types
+        assert "stop" in settings.notification_types
 
     def test_custom_notification_types(self):
         data = {"notification": {"types": ["idle_prompt"]}}
@@ -174,7 +175,7 @@ class TestParseNotification:
         data = {"colors": {"risk": {}}}
         settings = _parse(data)
         # Defaults preserved when no notification section
-        assert len(settings.notification_types) == 3
+        assert len(settings.notification_types) == 4
 
 
 class TestDisplayGuardSettings:

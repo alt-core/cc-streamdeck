@@ -95,12 +95,24 @@ echo $(pwd)/.venv/bin/cc-streamdeck-hook  # uv sync の場合
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/cc-streamdeck-hook"
+          }
+        ]
+      }
     ]
   }
 }
 ```
 
-> **Note**: `timeout` は秒単位。86400 = 24時間。離席して戻ってきても待機し続ける。
+> **Note**: PermissionRequest の `timeout` は秒単位。86400 = 24時間。離席して戻ってきても待機し続ける。
+
+> **Stop hook**: Claude のレスポンス完了時に発火。Stream Deck 上の残存表示をクリアし、"Done" 通知を表示する。PermissionRequest と同じ `command` を指定。
 
 ## 使い方
 
@@ -190,11 +202,11 @@ Claude Code の Notification hook を設定すると、入力待ちなどの状�
 }
 ```
 
-表示する通知の種類は `~/.config/cc-streamdeck/config.toml` で絞り込める（デフォルトは全種類）:
+表示する通知の種類は `~/.config/cc-streamdeck/config.toml` で絞り込める（デフォルトは全種類表示）:
 
 ```toml
 [notification]
-types = ["idle_prompt"]  # idle_prompt のみ表示
+types = ["idle_prompt"]  # idle_prompt のみ表示（stop の Done 通知も非表示にできる）
 ```
 
 ### 設定ファイル
@@ -231,9 +243,9 @@ level = "low"
 [risk.path_high]
 patterns = ['/etc/.*', '.*\.env$']
 
-# 表示する通知の種類（Notification hook 使用時）
+# 表示する通知の種類（Notification / Stop hook）
 [notification]
-types = ["idle_prompt", "auth_success", "elicitation_dialog"]  # デフォルト
+types = ["idle_prompt", "auth_success", "elicitation_dialog", "stop"]  # デフォルト
 
 # 表示切替後のボタン押下ガード時間（ミリ秒）
 [display]
