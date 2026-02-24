@@ -638,8 +638,14 @@ def render_notification(
 
     total_height = len(wrapped) * chosen_size
     y = (text_max_y - total_height) // 2
+    center = len(wrapped) == 1
     for line in wrapped:
-        draw.text((2, y), line, font=font, fill=text_color)
+        if center:
+            line_w = font.getlength(line)
+            x = (canvas_w - line_w) / 2
+            draw.text((x, y), line, font=font, fill=text_color)
+        else:
+            draw.text((2, y), line, font=font, fill=text_color)
         y += chosen_size
 
     # Split canvas into per-key tiles
