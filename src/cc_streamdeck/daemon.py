@@ -352,7 +352,11 @@ class Daemon:
             )
             self._next_id += 1
 
-            # Add to unified queue (supersedes same-PID items)
+            # Fallback (ExitPlanMode) signals the instance moved on;
+            # purge any stale connected items from the same PID.
+            if item_type == "fallback":
+                self._purge_connected_items(request.client_pid)
+
             self._add_item(item)
 
             # Wait for resolution
@@ -371,11 +375,21 @@ class Daemon:
             conn.close()
 
     def _handle_notification(self, msg: NotificationMessage) -> None:
-        """Handle a low-priority notification (fire-and-forget, no response)."""
+        """Handle a low-priority notification (fire-and-forget, no response).
+
+        Also purges any stale connected items (permission, ask, fallback) from
+        the same PID.  Claude Code does not kill old hook processes after a
+        terminal-side response (bug #15433), so receiving a notification from
+        an instance is a reliable signal that it is idle and any remaining
+        connected items are stale.
+        """
         enabled = self._settings.notification_types
         if enabled and msg.notification_type not in enabled:
             logger.info("Ignoring notification type: %s", msg.notification_type)
             return
+
+        # Purge stale connected items from the same PID
+        self._purge_connected_items(msg.client_pid)
 
         palette_idx = instance_palette_index(msg.client_pid, self._seen_pids)
         palette = self._risk_config.instance_palette
@@ -402,19 +416,44 @@ class Daemon:
     # -- Unified display queue --
 
     def _add_item(self, item: _DisplayItem) -> None:
-        """Add item to the queue, superseding any existing item from the same PID."""
+        """Add item to the queue.
+
+        Notifications supersede same-PID notifications (only one notification
+        per instance). Connected items (permission, ask, fallback) coexist
+        even from the same PID to support parallel sub-agents.
+        """
         with self._items_lock:
-            if item.client_pid:
-                old = [i for i in self._items if i.client_pid == item.client_pid]
+            if item.client_pid and item.item_type == "notification":
+                old = [
+                    i for i in self._items
+                    if i.client_pid == item.client_pid and i.item_type == "notification"
+                ]
                 for o in old:
                     self._items.remove(o)
-                    if o.done_event is not None:
-                        o.response = PermissionResponse(
-                            status="error", error_message="Superseded"
-                        )
-                        o.done_event.set()
             self._items.append(item)
         self._select_and_display()
+
+    def _purge_connected_items(self, client_pid: int) -> None:
+        """Remove all connected items (permission, ask, fallback) for a PID.
+
+        Called when a notification arrives, signalling the instance is idle
+        and any remaining connected items are stale (CC bug #15433).
+        """
+        with self._items_lock:
+            stale = [
+                i for i in self._items
+                if i.client_pid == client_pid and i.item_type in ("permission", "ask", "fallback")
+            ]
+            for o in stale:
+                self._items.remove(o)
+                if o.done_event is not None:
+                    o.response = PermissionResponse(
+                        status="error", error_message="Purged by notification"
+                    )
+                    o.done_event.set()
+        if stale:
+            logger.info("Purged %d stale item(s) for pid=%d", len(stale), client_pid)
+            self._select_and_display()
 
     def _remove_item(self, item: _DisplayItem) -> None:
         """Remove item from the queue and recalculate display."""

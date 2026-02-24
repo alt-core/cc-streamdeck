@@ -193,18 +193,21 @@ ExitPlanMode など、hook の `allow`/`deny` では適切にハンドリング�
 **`_DisplayItem`**: 全種別を統一するデータクラス。priority, timestamp, client_pid, item_type, request, done_event, response, always_active, ask_state 等を保持。
 
 **主要メソッド:**
-- `_add_item(item)`: リストに追加。同一PIDの既存アイテムは除去（`done_event` をエラーで起こす）。`_select_and_display()` を呼ぶ
+- `_add_item(item)`: リストに追加。notification の場合のみ同一PIDの既存 notification を除去。connected items（permission, ask, fallback）は同一PIDでも共存（並行サブエージェント対応）。`_select_and_display()` を呼ぶ
 - `_remove_item(item)`: リストから除去。`_select_and_display()` を呼ぶ
+- `_purge_connected_items(pid)`: 指定PIDの connected items（permission, ask, fallback）を全除去。`done_event` をエラーで起こし、接続スレッドに通知
 - `_select_and_display()`: `max(self._items, key=lambda i: (i.priority, i.timestamp))` で最優先アイテムを選択し、表示が変わった場合のみ `_render_item()` を呼ぶ。ガード時間がある場合は `guard_active=True` でレンダリングし、タイマーで期限後に `guard_active=False` で再レンダリング
 - `_wait_for_resolution(item, conn)`: 接続ハンドラスレッドが per-item `done_event` を1秒ポーリングで待機。client 切断検出時は `_remove_item()` で除去
 - `_render_item(item, guard_active)`: item_type に応じて適切な renderer を呼ぶ。permission 時は `guard_active` を `render_permission_request()` に渡す
 - `_guard_for_item(item)`: アイテム種別に応じて `_display_guard_sec`（permission/ask）または `_minor_guard_sec`（fallback/notification）を返す
 
 **動作:**
-- **同一PID上書き**: `_add_item` が同一PID既存アイテムを自動除去。superseded アイテムの接続スレッドは `done_event` で起こされ、エラー応答を返す
-- **プリエンプション**: 異PIDの新しいアイテムが来ると `_select_and_display()` が最新を選択。古いアイテムはリストに残り、新しいものが解決されると自動的に再表示される
+- **同一PID共存**: connected items（permission, ask, fallback）は同一PIDでも共存する。WebSearch 等のサブエージェントが並行して hook を投げるため、同一PIDからの PermissionRequest が同時に複数届くことがある。各アイテムは独立した `done_event` を持ち、ボタン押下・切断で個別に解決される
+- **同一PID notification 上書き**: notification のみ同一PIDの既存 notification を自動除去（1インスタンス1通知）
+- **stale items パージ**: CC はターミナル側で応答済みの hook プロセスを kill しない（バグ #15433）。そのため daemon 側に stale な connected items が残留する。パージのトリガーは idle_prompt（Notification hook）と ExitPlanMode（PermissionRequest hook）の受信。いずれも CC がユーザー入力を待っている状態で発火するため、その時点で同一PIDの未解決 PermissionRequest は存在しないはず。`_purge_connected_items()` で同一PIDの connected items を全削除し、残っていた hook 接続スレッドにエラー応答を返す
+- **プリエンプション**: 新しいアイテムが来ると `_select_and_display()` が最優先・最新を選択。古いアイテムはリストに残り、新しいものが解決されると自動的に再表示される
 - **Notification**: LOW として `_items` に投入。HIGH/MEDIUM 表示中は選択されないだけ。解決後に自然に表示される
-- **`_items_lock`**: 短命ロック（リスト操作と `_current_item` 更新のみ保護）。`_request_lock` のような長期保持なし
+- **`_items_lock`**: 短命ロック（リスト操作と `_current_item` 更新のみ保護）。長期保持なし
 
 ### Notification 表示
 
@@ -217,13 +220,15 @@ Mini 3x2:
 ```
 
 - `render_notification()`: 最下段を横長キャンバスとしてレンダリング。フォントは16px→10pxの自動選択
-- `_handle_notification()`: `_DisplayItem(priority=LOW)` として `_add_item()` に投入
-- 設定ファイル `[notification] types = [...]` で表示する notification_type を選択可能
+- `_handle_notification()`: stale items パージ後、`_DisplayItem(priority=LOW)` として `_add_item()` に投入
+- 設定ファイル `[notification] types = [...]` で表示する notification_type を選択可能（disabled な type は無視され、パージも行わない）
 - OK ボタン押下で dismiss（`_remove_item()` → 次のアイテムへ）
 
 ### PPIDベースの同一インスタンス識別
 
-Claude Code は PermissionRequest hook プロセスをターミナル応答後も kill しない（既知のバグ: GitHub #15433）。hook が `os.getppid()` を `client_pid` として daemon に送信。同じ PID からの新しいリクエストは `_add_item()` の同一PID上書きで古いものを自動除去する。
+hook が `os.getppid()` を `client_pid` として daemon に送信。同一 PID = 同一 Claude Code インスタンス。
+
+**並行リクエストと stale items**: WebSearch 等のサブエージェントは並行して PermissionRequest hook を投げるため、同一PIDから複数のリクエストが同時に届く。これらは `_items` 内で共存する。一方、CC はターミナル側で応答済みの hook プロセスを kill しない（既知のバグ: GitHub #15433）ため、stale な connected items が daemon 側に残留する。cleanup は idle_prompt（Notification）または ExitPlanMode の受信をトリガーとする。これらは CC がユーザー入力待ちの状態で発火するため、同一PIDの未解決 PermissionRequest は存在しないはずであり、安全にパージできる。
 
 ### Daemon自動起動とデバイス状態管理
 
