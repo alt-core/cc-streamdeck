@@ -281,7 +281,7 @@ uv run cc-streamdeck-focus <pid>     # ターミナルフォーカス（手動�
 
 ## Tech Stack
 
-- Python 3.9+ (uv, pyproject.toml, hatchling)
+- Python 3.10+ (uv, pyproject.toml, hatchling)
 - streamdeck (python-elgato-streamdeck, Stream Deck制御)
 - Pillow (ボタン画像生成、TrueTypeアンチエイリアス描画)
 - M PLUS 1 Code (20/16px, AA描画、日本語等幅コーディングフォント)

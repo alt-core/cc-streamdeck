@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Stream Deck Mini interface for Claude Code permission prompts"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "streamdeck>=0.9.5",
     "Pillow>=10.0",
@@ -27,7 +27,7 @@ packages = ["src/cc_streamdeck"]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 100
 
 [dependency-groups]

@@ -47,7 +47,7 @@ Claude Code → Hook (stdin JSON) → Hook Client → Unix Socket → Daemon →
 - Stream Deck（Mini, Original/MK.2, XL, Plus — Mini 以外は未検証）
   > **Elgato 公式の Stream Deck ソフトウェアは終了してください。** 本ツールは USB/HID で直接デバイスと通信するため、公式ソフトウェアと同時には使用できません。
 - [Claude Code](https://claude.ai/code) CLI
-- Python 3.9+
+- Python 3.10+
 - hidapi:
   ```bash
   # macOS
@@ -58,19 +58,9 @@ Claude Code → Hook (stdin JSON) → Hook Client → Unix Socket → Daemon →
 
 ## インストール
 
-### macOS（一番簡単な方法）
+### uv tool install（推奨）
 
-macOS には Python 3.9 が標準搭載されているので、追加インストールなしで使える:
-
-```bash
-pip3 install git+https://github.com/alt-core/cc-streamdeck.git
-```
-
-> macOS Sonoma 以降では `externally-managed-environment` エラーが出ることがある。その場合は `pip3 install --break-system-packages git+...` とするか、下記の uv を使う方法を推奨。
-
-### uv を使う場合
-
-[uv](https://docs.astral.sh/uv/) がインストール済みなら、隔離環境を自動作成してくれる `uv tool install` が便利:
+[uv](https://docs.astral.sh/uv/) が隔離環境を自動作成し、`cc-streamdeck-hook` 等のコマンドにパスを通してくれる:
 
 ```bash
 # uv のインストール（まだの場合）
@@ -78,6 +68,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # cc-streamdeck のインストール
 uv tool install git+https://github.com/alt-core/cc-streamdeck.git
+```
+
+### pip を使う場合
+
+Python 3.10 以降がインストールされていれば `pip` でもインストールできる。ただしインストール先にパスが通っていない場合があるため、Hook 設定時に `which cc-streamdeck-hook` でパスが見つからなければ、`pip show -f cc-streamdeck` 等で確認すること。
+
+```bash
+pip install git+https://github.com/alt-core/cc-streamdeck.git
 ```
 
 ### ソースから（開発用）
@@ -94,8 +92,7 @@ uv sync
 
 ```bash
 # パスの確認
-which cc-streamdeck-hook          # pip install の場合
-# または
+which cc-streamdeck-hook                  # uv tool install の場合
 echo $(pwd)/.venv/bin/cc-streamdeck-hook  # uv sync の場合
 ```
 
