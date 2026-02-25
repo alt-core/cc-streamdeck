@@ -18,7 +18,7 @@ CHOICE_COLORS = {
     "always_off": "#000040",
     "always_on": "#0050D0",
     "allow_always": "#0050D0",
-    "open": "#303030",
+    "open": "#3D2820",
 }
 
 # Font sizes: M PLUS 1 Code (AA) for 20/16, PixelMplus10 (dot-by-dot) for 10
